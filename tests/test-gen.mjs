@@ -106,7 +106,11 @@ const pack = async (u8, fmt) => (fmt === 'zlib' ? zlib.deflateSync(u8) : zlib.gz
   let wc = 0, lc = 0; for (let i = 0; i < W * H; i++) { wc += ras.water[i]; lc += ras.land[i] ? 1 : 0; }
   console.log('osm water cells', wc, '(expected ~ 40*30-100=1100 + river)', 'wood cells', lc, '(expected ~1200)');
   console.log('hole is empty:', ras.water[35 * W + 35] === 0, ' ring body filled:', ras.water[25 * W + 25] === 1);
-  console.log('query:\n' + G.buildOverpassQuery(bb, { water: true, land: false, roads: false }).split('\n').slice(0, 4).join('\n'));
+  const clippedQuery = G.buildOverpassQuery(bb, { water: true, land: false, roads: false, timeout: 25 });
+  const clippedBounds = [bb.s, bb.w, bb.n, bb.e].map(v => v.toFixed(6)).join(',');
+  if (!clippedQuery.startsWith('[out:json][timeout:25];')) throw new Error('Overpass query timeout was not applied');
+  if (!clippedQuery.endsWith('out geom(' + clippedBounds + ');')) throw new Error('Overpass geometry must be clipped to the map bounds');
+  console.log('query:\\n' + clippedQuery.split('\\n').slice(0, 4).join('\\n'));
   // DEM sampler test using synthetic tiles
   const z = G.demZoom(geo, 64); const rg = G.demRange(geo, z);
   console.log('dem z', z, 'tiles', (rg.tx1 - rg.tx0 + 1) * (rg.ty1 - rg.ty0 + 1));
