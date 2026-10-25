@@ -77,6 +77,7 @@ function assertClipped(elements) {
 {
   assert.deepEqual(JSON.parse(JSON.stringify(A.roadTags({ type: 'Freeway' }))), { highway: 'motorway' });
   assert.deepEqual(JSON.parse(JSON.stringify(A.roadTags({ type: 'Secondary Highway' }))), { highway: 'secondary' });
+  assert.deepEqual(JSON.parse(JSON.stringify(A.roadTags({ type: 'Minor Highway' }))), { highway: 'tertiary' });
   assert.equal(A.roadTags({ type: 'Ferry' }), null);
 }
 
