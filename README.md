@@ -21,7 +21,8 @@ tests/             unit test, local dev server with mock data, browser end-to-en
 | Endpoint | What it does |
 | --- | --- |
 | `GET /api/dem?z&x0&x1&y0&y1` | Fetches up to 40 elevation tiles **in parallel at the edge** and returns them in one response, cached by Cloudflare. A map needs one request instead of dozens. |
-| `POST /api/osm` | Overpass proxy. Starts the next mirror when the first is slow (hedged requests) and caches results at the edge, so repeated or shared areas are instant. |
+| `POST /api/terrain-features` | Queries public ArcGIS REST services for water bodies, linear rivers, and global land-cover classes, clips geometry to the selected bounds, and caches results at the edge. |
+| `POST /api/osm` | Optional Overpass proxy for the roads overlay only. Water and land-cover generation no longer depends on public Overpass instances. |
 | `GET /api/geocode?q` | Place search through Nominatim with a proper User-Agent and edge caching. |
 
 The Worker does no heavy computation (the free plan allows about 10 ms of CPU per request). All terrain processing runs in a
