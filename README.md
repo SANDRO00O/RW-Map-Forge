@@ -73,8 +73,9 @@ If the game rejects a map, use the export option **Copy from a working map** and
 ## Data sources and attribution
 
 * Elevation: Terrain Tiles on AWS Open Data (Terrarium encoding).
-* Water and land cover: (c) OpenStreetMap contributors, ODbL, through the Overpass API.
-* Place search: Nominatim. Base maps: CARTO and Esri World Imagery. Please respect their usage policies; for a high-traffic public
+* Water bodies: Esri/Garmin World Water Bodies; linear water features: Esri Detailed Linear Hydrology.
+* Broad land-cover classes: University of Minnesota Global Land Cover (ArcGIS Feature Service).
+* Optional road overlay and place search: OpenStreetMap contributors (ODbL) through Overpass and Nominatim. Base maps: CARTO and Esri World Imagery. Please respect their usage policies; for a high-traffic public
   deployment use a base-map provider you have an account with (edit `LAYERS` in `public/js/app.js` and the `img-src` CSP in `public/_headers`).
 
 Rusted Warfare is a trademark of Corroding Games. This is an unofficial fan tool.
