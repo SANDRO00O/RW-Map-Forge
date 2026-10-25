@@ -64,4 +64,20 @@ function assertClipped(elements) {
   assert.deepEqual(JSON.parse(JSON.stringify(result[0].tags)), { natural: 'wood' });
 }
 
+{
+  const result = A.featureToElements({
+    properties: { ne_id: 99, type: 'Major Highway', name: 'test road' },
+    geometry: { type: 'LineString', coordinates: [[47.49, 30.45], [47.61, 30.45]] },
+  }, 'roads', bbox, 40);
+  assert.equal(result.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(result[0].tags)), { highway: 'primary' });
+  assertClipped(result);
+}
+
+{
+  assert.deepEqual(JSON.parse(JSON.stringify(A.roadTags({ type: 'Freeway' }))), { highway: 'motorway' });
+  assert.deepEqual(JSON.parse(JSON.stringify(A.roadTags({ type: 'Secondary Highway' }))), { highway: 'secondary' });
+  assert.equal(A.roadTags({ type: 'Ferry' }), null);
+}
+
 console.log('ArcGIS conversion tests passed.');
