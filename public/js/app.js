@@ -45,8 +45,8 @@
 
   /* --------------------------------------------------------------- location */
   const LAYERS = [
-    { id: 'streets', name: 'Streets', url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=cb1_4uds_1_7172afb4fccf36ee843ce377', subdomains: ['a', 'b', 'c', 'd'], maxZoom: 18, bg: '#e6e2da', attribution: 'Map data: OpenStreetMap contributors. Style: CARTO' },
-    { id: 'dark', name: 'Dark', url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png?key=cb1_4uds_1_7172afb4fccf36ee843ce377', subdomains: ['a', 'b', 'c', 'd'], maxZoom: 18, bg: '#0b0e13', attribution: 'Map data: OpenStreetMap contributors. Style: CARTO' },
+    { id: 'streets', name: 'Streets', url: 'https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=cb1_4uds_1_7172afb4fccf36ee843ce377', maxZoom: 18, bg: '#e6e2da', attribution: 'Map data: OpenStreetMap contributors. Style: CARTO' },
+    { id: 'dark', name: 'Dark', url: 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png?key=cb1_4uds_1_7172afb4fccf36ee843ce377', subdomains: ['a', 'b', 'c', 'd'], maxZoom: 18, bg: '#0b0e13', attribution: 'Map data: OpenStreetMap contributors. Style: CARTO' },
     { id: 'satellite', name: 'Satellite', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', maxZoom: 18, bg: '#0b0e13', attribution: 'Imagery: Esri, Maxar, Earthstar Geographics' },
   ];
 
