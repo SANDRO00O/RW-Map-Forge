@@ -204,7 +204,7 @@ function dedupeArcgisFeatures(features) {
   });
 }
 
-async function loadOsm(geo, o) {
+async function loadLegacyOsm(geo, o) {
   const bb = geo.bbox();
   const grid = terrainCellsForBounds(bb);
   let elements = [], successes = 0;
@@ -279,6 +279,206 @@ async function loadOsm(geo, o) {
   return successes ? { elements: elements } : null;
 }
 
+/* ------------------------------------------- preloaded R2 terrain datasets */
+const HYDRO_TILE_DEG = 2;
+const ROAD_TILE_DEG = 10;
+const LAND_TILE_DEG = 10;
+const LAND_TILE_RES = 0.025;
+const LAND_TILE_SIDE = 400;
+const LAND_TILE_BYTES = LAND_TILE_SIDE * LAND_TILE_SIDE;
+const hydroTilePromises = new Map();
+const landTilePromises = new Map();
+
+function normalizeLongitude(lon) {
+  return ((lon + 180) % 360 + 360) % 360 - 180;
+}
+
+function tileIndicesForBounds(bbox, degrees) {
+  const nx = Math.round(360 / degrees);
+  const ny = Math.round(180 / degrees);
+  const firstX = Math.floor((bbox.w + 180) / degrees);
+  const lastX = Math.floor((bbox.e + 180 - 1e-9) / degrees);
+  const firstY = Math.max(0, Math.floor((bbox.s + 90) / degrees));
+  const lastY = Math.min(ny - 1, Math.floor((bbox.n + 90 - 1e-9) / degrees));
+  const xs = new Set();
+  for (let i = firstX; i <= lastX; i++) xs.add(((i % nx) + nx) % nx);
+  const tiles = [];
+  for (let y = firstY; y <= lastY; y++) for (const x of xs) tiles.push({ x: x, y: y });
+  return tiles;
+}
+
+async function gunzipBytes(bytes) {
+  if (typeof DecompressionStream === 'undefined') throw new Error('This browser does not support gzip decompression');
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function fetchHydroTile(source, x, y) {
+  const cacheKey = source + '/' + x + '/' + y;
+  if (!hydroTilePromises.has(cacheKey)) {
+    const promise = (async () => {
+      const res = await fetch('/api/hydro-tile?source=' + encodeURIComponent(source) + '&x=' + x + '&y=' + y);
+      if (!res.ok) throw new Error(await errorFrom(res, 'Self-hosted ' + source + ' tile request failed'));
+      if (res.headers.get('x-global-tile-empty') === '1') return [];
+      const raw = await gunzipBytes(new Uint8Array(await res.arrayBuffer()));
+      const collection = JSON.parse(new TextDecoder().decode(raw));
+      if (!collection || !Array.isArray(collection.features)) throw new Error('Invalid self-hosted vector tile for ' + source);
+      return collection.features;
+    })();
+    hydroTilePromises.set(cacheKey, promise);
+    promise.catch(() => hydroTilePromises.delete(cacheKey));
+  }
+  return hydroTilePromises.get(cacheKey);
+}
+
+function featureDedupKey(feature) {
+  const props = feature && (feature.properties || feature.attributes) || {};
+  const entry = Object.entries(props).find(([key, value]) =>
+    value != null && /^(hyriv_id|hylak_id|ne_id|objectid|fid|oid)(?:_\d+)?$/i.test(key));
+  // Include geometry: source features are clipped at 2° tile edges, so fragments
+  // sharing an original source ID must not erase each other at tile boundaries.
+  return (entry ? entry[0].toLowerCase() + ':' + String(entry[1]) : 'no-id') +
+    ':' + JSON.stringify(feature && feature.geometry || {});
+}
+
+function dedupeGlobalFeatures(features) {
+  const seen = new Set();
+  return features.filter((feature) => {
+    const key = featureDedupKey(feature);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function fetchSelfHostedFeatures(source, bbox) {
+  const degrees = source === 'roads' ? ROAD_TILE_DEG : HYDRO_TILE_DEG;
+  const tiles = tileIndicesForBounds(bbox, degrees);
+  const fetched = await mapLimit(tiles, 4, async (tile) => ({
+    tile: tile,
+    features: await fetchHydroTile(source, tile.x, tile.y),
+  }));
+  return { features: dedupeGlobalFeatures(fetched.flatMap((r) => r.features)), tiles: tiles.length };
+}
+
+async function fetchLandCoverTile(x, y) {
+  const key = x + '/' + y;
+  if (!landTilePromises.has(key)) {
+    const promise = (async () => {
+      const res = await fetch('/api/landcover-tile?x=' + x + '&y=' + y);
+      if (!res.ok) throw new Error(await errorFrom(res, 'Self-hosted land-cover tile request failed'));
+      const bytes = await gunzipBytes(new Uint8Array(await res.arrayBuffer()));
+      if (bytes.length !== LAND_TILE_BYTES) {
+        throw new Error('Invalid land-cover tile size at ' + key + ': expected ' + LAND_TILE_BYTES + ', got ' + bytes.length);
+      }
+      return bytes;
+    })();
+    landTilePromises.set(key, promise);
+    promise.catch(() => landTilePromises.delete(key));
+  }
+  return landTilePromises.get(key);
+}
+
+function mercatorCellToGeo(geo, x, y) {
+  const earth = 6378137;
+  const mx = geo.x0 + (x + 0.5) * geo.k;
+  const my = geo.yTop - (y + 0.5) * geo.k;
+  const lat = (2 * Math.atan(Math.exp(my / earth)) - Math.PI / 2) * 180 / Math.PI;
+  return { lat: lat, lon: normalizeLongitude(mx / earth * 180 / Math.PI) };
+}
+
+async function sampleLandCover(geo, W, H) {
+  const bbox = geo.bbox();
+  const tileRefs = tileIndicesForBounds(bbox, LAND_TILE_DEG);
+  const entries = await Promise.all(tileRefs.map(async (tile) => ({
+    key: tile.x + '/' + tile.y,
+    data: await fetchLandCoverTile(tile.x, tile.y),
+  })));
+  const tiles = new Map(entries.map((entry) => [entry.key, entry.data]));
+  const mask = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const geoPos = mercatorCellToGeo(geo, x, y);
+      const lon = geoPos.lon, lat = geoPos.lat;
+      if (lat < -90 || lat > 90) continue;
+      const tx = Math.min(35, Math.max(0, Math.floor((lon + 180) / LAND_TILE_DEG)));
+      const ty = Math.min(17, Math.max(0, Math.floor((lat + 90) / LAND_TILE_DEG)));
+      const data = tiles.get(tx + '/' + ty);
+      if (!data) continue;
+      const tileWest = -180 + tx * LAND_TILE_DEG;
+      const tileNorth = -90 + (ty + 1) * LAND_TILE_DEG;
+      const col = Math.min(LAND_TILE_SIDE - 1, Math.max(0, Math.floor((lon - tileWest) / LAND_TILE_RES)));
+      const row = Math.min(LAND_TILE_SIDE - 1, Math.max(0, Math.floor((tileNorth - lat) / LAND_TILE_RES)));
+      mask[y * W + x] = data[row * LAND_TILE_SIDE + col];
+    }
+  }
+  return mask;
+}
+
+async function loadSelfHostedOsm(geo, o) {
+  const bbox = geo.bbox();
+  let elements = [], successes = 0, landCoverMask = null;
+  const sources = [];
+  if (o.water) {
+    sources.push({ source: 'water', label: 'lakes and reservoirs', kind: 'water' });
+    sources.push({ source: 'rivers', label: 'major rivers', kind: 'rivers' });
+  }
+  if (o.roads) sources.push({ source: 'roads', label: 'major roads', kind: 'roads' });
+
+  const settled = await Promise.all(sources.map(async (s) => {
+    try {
+      progress('osm', 'Loading ' + s.label + ' from locally hosted R2 tiles', 0.25);
+      const result = await fetchSelfHostedFeatures(s.source, bbox);
+      const converted = [];
+      for (let i = 0; i < result.features.length; i++) {
+        converted.push(...A.featureToElements(result.features[i], s.kind, bbox, (i + 1) * 100000));
+      }
+      progress('osm', 'Loaded ' + converted.length + ' ' + s.label + ' features from R2 (' +
+        result.tiles + ' tile(s), ' + result.features.length + ' source records)', 0.42);
+      return { success: true, label: s.label, elements: converted };
+    } catch (err) {
+      return { success: false, label: s.label, error: err.message || String(err) };
+    }
+  }));
+
+  for (const item of settled) {
+    if (item.success) {
+      elements = elements.concat(item.elements);
+      successes++;
+    } else {
+      progress('osm', 'Skipped local ' + item.label + ': ' + item.error, 0.44);
+    }
+  }
+
+  if (o.land) {
+    try {
+      progress('osm', 'Loading global land cover from local R2 tiles', 0.45);
+      landCoverMask = await sampleLandCover(geo, geo.W, geo.H);
+      progress('osm', 'Loaded global MODIS land-cover grid from R2', 0.49);
+      successes++;
+    } catch (err) {
+      progress('osm', 'Skipped local land cover: ' + (err.message || String(err)), 0.5);
+    }
+  }
+
+  return successes ? { elements: elements, landCoverMask: landCoverMask } : null;
+}
+
+async function loadOsm(geo, o) {
+  // Keep the existing remote path until the first complete global import finishes.
+  // Once the manifest is ready, all water, rivers, roads and land-cover reads stay in R2.
+  try {
+    const statusRes = await fetch('/api/terrain-status');
+    const status = await statusRes.json();
+    if (status && status.ready === true) return await loadSelfHostedOsm(geo, o);
+    progress('osm', 'Global R2 dataset is not ready yet; using the existing online fallback', 0.24);
+  } catch (_) {
+    progress('osm', 'Global R2 dataset status unavailable; using the existing online fallback', 0.24);
+  }
+  return await loadLegacyOsm(geo, o);
+}
+
+
 /* ---------------------------------------------------------------- Generate */
 
 async function generate(p) {
@@ -298,8 +498,15 @@ async function generate(p) {
   let ras = { water: null, land: null, road: null };
   if (p.osm.water || p.osm.land || p.osm.roads) {
     const json = await loadOsm(geo, p.osm);
-    if (json) { progress('osm', 'Rasterizing ' + json.elements.length + ' map features', 0.55); ras = G.rasterizeOsm(json, geo, W, H, p.osm); }
-    else progress('osm', 'No external map-feature data; using elevation only', 0.55);
+    if (json) {
+      progress('osm', 'Rasterizing ' + json.elements.length + ' map features', 0.55);
+      ras = G.rasterizeOsm({ elements: json.elements }, geo, W, H, p.osm);
+      if (json.landCoverMask) {
+        for (let i = 0; i < json.landCoverMask.length; i++) {
+          if (json.landCoverMask[i] !== 0) ras.land[i] = json.landCoverMask[i];
+        }
+      }
+    } else progress('osm', 'No external map-feature data; using elevation only', 0.55);
   } else progress('osm', 'External map-feature data disabled', 0.55);
 
   progress('terrain', 'Classifying terrain', 0.65);
