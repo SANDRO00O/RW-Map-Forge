@@ -409,7 +409,7 @@ def main() -> None:
         roads_shp = extract_shapefile(zip_path, roads_dir, "ne_10m_roads.shp")
         metrics["roads"] = build_vector_grid(
             client, roads_shp, "roads", ROAD_DEG,
-            None, "ne_id,type", "0.001", temp_dir, existing_sizes
+            None, "type", "0.001", temp_dir, existing_sizes
         )
         shutil.rmtree(roads_dir, ignore_errors=True)
         zip_path.unlink(missing_ok=True)
