@@ -280,7 +280,7 @@ async function loadLegacyOsm(geo, o) {
 }
 
 /* ------------------------------------------- preloaded R2 terrain datasets */
-const HYDRO_TILE_DEG = 2;
+const HYDRO_TILE_DEG = 4;
 const ROAD_TILE_DEG = 10;
 const LAND_TILE_DEG = 10;
 const LAND_TILE_RES = 0.025;
