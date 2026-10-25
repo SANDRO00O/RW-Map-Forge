@@ -12,7 +12,7 @@
  * runs in a Web Worker inside the visitor's browser.
  */
 
-const UA = 'RWMapForge/1.0 (Rusted Warfare map generator; https://workers.cloudflare.com)';
+const UA = 'RWMapForge/1.0 (Rusted Warfare map generator; https://rw-map-forge.pages.dev)';
 const DEM_HOSTS = [
   'https://s3.amazonaws.com/elevation-tiles-prod/terrarium',
   'https://elevation-tiles-prod.s3.amazonaws.com/terrarium',
@@ -129,51 +129,83 @@ async function sha256Hex(text) {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-/** Starts mirror 0 now, mirror 1 after 9 s and mirror 2 after 20 s (or immediately when the previous one fails). */
+/**
+ * Try the public Overpass mirrors with bounded wall time. Keep the timeout active
+ * until the response body is fully read; fetch() can resolve at headers while the
+ * body is still stalled. Reject JSON error remarks so another mirror can be tried.
+ */
 function hedgedOverpass(query) {
   return new Promise((resolve, reject) => {
-    const controllers = [];
+    const controllers = new Map();
     const started = new Set();
     let finished = false;
     let failures = 0;
     let lastError = null;
+    const MIRROR_TIMEOUT_MS = 30000;
 
     const launch = (i) => {
-      if (finished || i >= OVERPASS.length || started.has(i)) return;
+      if (finished || i < 0 || i >= OVERPASS.length || started.has(i)) return;
       started.add(i);
       const ctl = new AbortController();
-      controllers.push(ctl);
-      const timer = setTimeout(() => ctl.abort(), 55000);
-      fetch(OVERPASS[i], {
-        method: 'POST',
-        headers: { 'content-type': 'application/x-www-form-urlencoded', 'user-agent': UA },
-        body: 'data=' + encodeURIComponent(query),
-        signal: ctl.signal,
-      })
-        .then((r) => {
-          clearTimeout(timer);
-          const type = r.headers.get('content-type') || '';
-          if (r.ok && type.includes('json') && !finished) {
-            finished = true;
-            controllers.forEach((c) => c !== ctl && c.abort());
-            resolve(r);
-          } else if (!finished) {
-            throw new Error(`Overpass mirror ${i} replied ${r.status}`);
+      controllers.set(i, ctl);
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        ctl.abort();
+      }, MIRROR_TIMEOUT_MS);
+
+      (async () => {
+        try {
+          const r = await fetch(OVERPASS[i], {
+            method: 'POST',
+            headers: { 'content-type': 'application/x-www-form-urlencoded', 'user-agent': UA },
+            body: 'data=' + encodeURIComponent(query),
+            signal: ctl.signal,
+          });
+          const body = await r.text();
+          if (!r.ok) {
+            const detail = body.replace(/\\s+/g, ' ').slice(0, 180);
+            throw new Error(`Overpass mirror ${i} replied HTTP ${r.status}${detail ? ': ' + detail : ''}`);
           }
-        })
-        .catch((err) => {
-          clearTimeout(timer);
+
+          let data;
+          try { data = JSON.parse(body); }
+          catch (_) { throw new Error(`Overpass mirror ${i} returned invalid JSON`); }
+
+          const remark = String(data && data.remark || '');
+          if (/timed out|timeout|out of memory|query ran out|rate.?limit|server is probably too busy|dispatcher.*(?:off|unavailable)/i.test(remark)) {
+            throw new Error(`Overpass mirror ${i}: ${remark.slice(0, 220)}`);
+          }
+          if (!data || !Array.isArray(data.elements)) {
+            throw new Error(`Overpass mirror ${i} returned no elements array`);
+          }
           if (finished) return;
-          lastError = err;
+
+          finished = true;
+          for (const [j, other] of controllers) if (j !== i) other.abort();
+          resolve(new Response(body, {
+            status: 200,
+            headers: { 'content-type': 'application/json; charset=utf-8' },
+          }));
+        } catch (err) {
+          if (finished) return;
+          lastError = timedOut
+            ? new Error(`Overpass mirror ${i} timed out after ${Math.round(MIRROR_TIMEOUT_MS / 1000)} seconds`)
+            : new Error(`Overpass mirror ${i}: ${String((err && err.message) || err)}`);
           failures++;
-          if (failures >= OVERPASS.length) reject(lastError);
-          else launch(i + 1);
-        });
+          const next = OVERPASS.findIndex((_, j) => !started.has(j));
+          if (next >= 0) launch(next);
+          else if (failures >= started.size && started.size >= OVERPASS.length) reject(lastError);
+        } finally {
+          clearTimeout(timer);
+        }
+      })();
     };
 
+    // Briefly hedge slow mirrors, but cap each full request (including body download).
     launch(0);
-    setTimeout(() => launch(1), 9000);
-    setTimeout(() => launch(2), 20000);
+    setTimeout(() => launch(1), 5000);
+    setTimeout(() => launch(2), 11000);
   });
 }
 
