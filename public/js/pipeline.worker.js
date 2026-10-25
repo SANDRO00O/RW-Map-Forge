@@ -134,11 +134,15 @@ async function fetchArcgisSource(source, bbox) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ bbox: bbox, source: source }),
   });
-  if (!res.ok) throw new Error(await errorFrom(res, 'ArcGIS ' + source + ' request failed'));
+  if (!res.ok) throw new Error(await errorFrom(res, 'Terrain data request failed'));
   const data = await res.json();
-  if (data && data.error) throw new Error(typeof data.error === 'string' ? data.error : (data.error.message || 'ArcGIS API error'));
-  if (!data || !Array.isArray(data.features)) throw new Error('ArcGIS ' + source + ' response did not contain GeoJSON features');
-  return data.features;
+  if (data && data.error) throw new Error(typeof data.error === 'string' ? data.error : (data.error.message || 'Terrain data API error'));
+  if (!data || !Array.isArray(data.features)) throw new Error('Terrain data source did not return a feature collection');
+  return {
+    features: data.features,
+    cacheStatus: res.headers.get('x-terrain-cache') || 'UNKNOWN',
+    dataSource: res.headers.get('x-terrain-source') || 'unknown source',
+  };
 }
 
 async function loadOsm(geo, o) {
@@ -153,13 +157,19 @@ async function loadOsm(geo, o) {
 
   const settled = await Promise.all(sources.map(async (s) => {
     try {
-      progress('osm', 'Downloading ' + s.label + ' from ArcGIS', 0.25);
-      const features = await fetchArcgisSource(s.source, bb);
+      progress('osm', 'Loading ' + s.label + ' (self-hosted cache first)', 0.25);
+      const result = await fetchArcgisSource(s.source, bb);
+      const features = result.features;
       const converted = [];
       for (let i = 0; i < features.length; i++) {
         converted.push(...A.featureToElements(features[i], s.kind, bb, (i + 1) * 100000));
       }
-      progress('osm', 'Loaded ' + converted.length + ' ' + s.label + ' features from ArcGIS', 0.42);
+      const cacheLabel = result.cacheStatus === 'HIT' ? 'R2 cache hit'
+        : result.cacheStatus === 'MISS' ? 'fetched and saved to R2'
+        : result.cacheStatus === 'EDGE-HIT' ? 'edge cache hit'
+        : 'cache ' + result.cacheStatus;
+      progress('osm', 'Loaded ' + converted.length + ' ' + s.label + ' feature(s) from ' +
+        features.length + ' raw record(s); ' + cacheLabel, 0.42);
       return { success: true, label: s.label, elements: converted };
     } catch (err) {
       return { success: false, label: s.label, error: err.message || String(err) };
