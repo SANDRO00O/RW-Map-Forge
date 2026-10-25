@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import gzip
+import hashlib
 import json
 import os
 import shutil
@@ -50,10 +51,21 @@ def command(args: list[str]) -> None:
     log("$ " + " ".join(map(str, args)))
     subprocess.run(list(map(str, args)), check=True)
 
-def download(url: str, target: Path) -> None:
+def md5_file(path: Path) -> str:
+    digest = hashlib.md5()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def download(url: str, target: Path, expected_md5: str | None = None) -> None:
     if target.exists() and target.stat().st_size > 0:
-        log(f"Reusing downloaded file {target.name} ({target.stat().st_size:,} bytes)")
-        return
+        if not expected_md5 or md5_file(target).lower() == expected_md5.lower():
+            log(f"Reusing downloaded file {target.name} ({target.stat().st_size:,} bytes)")
+            return
+        log(f"Existing {target.name} failed its checksum; downloading it again.")
+        target.unlink()
     target.parent.mkdir(parents=True, exist_ok=True)
     temp = target.with_suffix(target.suffix + ".part")
     req = urllib.request.Request(url, headers={"User-Agent": "RWMapForge-global-terrain-import/1.0"})
@@ -64,6 +76,11 @@ def download(url: str, target: Path) -> None:
             log(f"Remote size: {int(total):,} bytes")
         shutil.copyfileobj(response, out, length=1024 * 1024)
     temp.replace(target)
+    if expected_md5:
+        actual = md5_file(target)
+        if actual.lower() != expected_md5.lower():
+            target.unlink(missing_ok=True)
+            raise RuntimeError(f"Checksum mismatch for {target.name}: expected {expected_md5}, got {actual}")
     log(f"Downloaded {target.name} ({target.stat().st_size:,} bytes)")
 
 def extract_shapefile(zip_path: Path, out_dir: Path, expected: str) -> Path:
@@ -159,7 +176,7 @@ def mark_manifest(client, ready: bool, **extra) -> None:
             "landcover": {
                 "name": "MODIS MCD12Q1 v061, 2021 IGBP land-cover class",
                 "url": "https://zenodo.org/records/8367523",
-                "license": "NASA EOSDIS open data; redistributed from OpenGeoHub global mosaic",
+                "license": "Derived from NASA LP DAAC MCD12Q1 v061; retain source attribution and the OpenGeoHub record citation. The mosaic record does not surface a separate license label.",
                 "attribution": "NASA LP DAAC MCD12Q1 v061; OpenGeoHub global mosaic",
                 "sourceResolution": "approximately 1 km",
                 "storedResolution": "0.025 degrees (about 2.8 km at the equator)",
@@ -399,7 +416,7 @@ def main() -> None:
 
         # MODIS MCD12Q1 2021 IGBP class raster; 156 MB source, compact tile cache output.
         land_tif = work / "modis-landcover-2021.tif"
-        download(MODIS_LANDCOVER_URL, land_tif)
+        download(MODIS_LANDCOVER_URL, land_tif, expected_md5="862010ec14d621333126336a65ee01c5")
         metrics["landcover"] = build_landcover(client, land_tif, temp_dir, existing_sizes)
         land_tif.unlink(missing_ok=True)
 
