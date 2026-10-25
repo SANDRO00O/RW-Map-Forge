@@ -39,7 +39,7 @@ export async function handleApiRequest(request, ctx, workerEnv) {
   if (!url.pathname.startsWith('/api/')) return null;
 
   try {
-    if (url.pathname === '/api/health') return json({ ok: true });
+    if (url.pathname === '/api/health') return json({ ok: true, terrainCache: !!((workerEnv || (ctx && ctx.env) || {}).TERRAIN_CACHE) });
     if (url.pathname === '/api/dem' && request.method === 'GET') return await handleDem(request, url, ctx);
     if (url.pathname === '/api/terrain-features' && request.method === 'POST') return await handleTerrainFeatures(request, ctx, workerEnv || (ctx && ctx.env) || {});
     if (url.pathname === '/api/osm' && request.method === 'POST') return await handleOsm(request, ctx);
