@@ -18,3 +18,9 @@ jobs:
           node-version: 22
       - name: Run unit tests
         run: npm test
+      - name: Validate import script syntax
+        run: python3 -m py_compile scripts/import-global-terrain.py
+      - name: Validate browser worker syntax
+        run: |
+          node --check public/js/pipeline.worker.js
+          node --check public/js/arcgis.js
