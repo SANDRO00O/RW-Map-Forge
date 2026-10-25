@@ -131,6 +131,9 @@ export default {
 
 const GLOBAL_TERRAIN_PREFIX = 'global/v1';
 const GLOBAL_MANIFEST_KEY = GLOBAL_TERRAIN_PREFIX + '/manifest.json';
+const inFlightTerrainTiles = new Map();
+
+const inFlightManifestReads = new Map();
 
 async function globalTerrainManifest(env, ctx) {
   const r2 = env && env.TERRAIN_CACHE;
@@ -142,20 +145,32 @@ async function globalTerrainManifest(env, ctx) {
     try { return await hit.json(); } catch (_) { /* reread the bucket */ }
   }
 
-  let object;
-  try { object = await r2.get(GLOBAL_MANIFEST_KEY); }
-  catch (err) { return { ready: false, error: 'Could not read global terrain manifest: ' + String(err.message || err) }; }
-  if (!object) return { ready: false, error: 'Global terrain datasets have not been imported into R2 yet' };
+  // Coalesce simultaneous cache misses in this isolate so a burst cannot make
+  // every concurrent request read the same manifest object from R2.
+  const flightKey = cacheKey.url;
+  let pending = inFlightManifestReads.get(flightKey);
+  if (!pending) {
+    pending = (async () => {
+      let object;
+      try { object = await r2.get(GLOBAL_MANIFEST_KEY); }
+      catch (err) { return { ready: false, error: 'Could not read global terrain manifest: ' + String(err.message || err) }; }
+      if (!object) return { ready: false, error: 'Global terrain datasets have not been imported into R2 yet' };
 
-  let manifest;
-  try { manifest = JSON.parse(await new Response(object.body).text()); }
-  catch (_) { return { ready: false, error: 'Global terrain manifest is invalid JSON' }; }
+      let manifest;
+      try { manifest = JSON.parse(await new Response(object.body).text()); }
+      catch (_) { return { ready: false, error: 'Global terrain manifest is invalid JSON' }; }
 
-  if (manifest.ready === true) {
-    const response = json(manifest, 200, { 'cache-control': 'public, max-age=60' });
-    ctx.waitUntil(caches.default.put(cacheKey, response.clone()).catch(() => {}));
+      if (manifest.ready === true) {
+        const response = json(manifest, 200, { 'cache-control': 'public, max-age=60' });
+        await caches.default.put(cacheKey, response.clone()).catch(() => {});
+      }
+      return manifest;
+    })();
+    inFlightManifestReads.set(flightKey, pending);
   }
-  return manifest;
+
+  try { return await pending; }
+  finally { if (inFlightManifestReads.get(flightKey) === pending) inFlightManifestReads.delete(flightKey); }
 }
 
 async function handleGlobalTerrainStatus(ctx, env) {
@@ -216,36 +231,46 @@ async function handleGlobalTerrainTile(url, ctx, env, kind) {
   const cached = await caches.default.match(cacheKey);
   if (cached) return cached;
 
-  let object;
-  try { object = await r2.get(key); }
-  catch (err) { return json({ error: 'Unable to read local terrain tile: ' + String(err.message || err) }, 502); }
+  // Keep a single R2 read/write in flight for the same immutable tile per isolate.
+  // This matters during a burst, before the first Cache API put finishes.
+  let pending = inFlightTerrainTiles.get(cacheKey.url);
+  if (!pending) {
+    pending = (async () => {
+      let object;
+      try { object = await r2.get(key); }
+      catch (err) { return json({ error: 'Unable to read local terrain tile: ' + String(err.message || err) }, 502); }
 
-  if (!object) {
-    // Missing vector tiles are legitimate empty areas. The ready manifest is only
-    // published after the importer finishes all source datasets.
-    if (kind === 'hydro') {
-      const empty = json({ type: 'FeatureCollection', features: [] }, 200, {
-        'cache-control': 'public, max-age=31536000, immutable',
-        'x-global-tile-empty': '1',
-        'x-global-dataset': source,
+      if (!object) {
+        // Empty vector areas are expected; a missing raster tile is not.
+        if (kind === 'hydro') {
+          const empty = json({ type: 'FeatureCollection', features: [] }, 200, {
+            'cache-control': 'public, max-age=31536000, immutable',
+            'x-global-tile-empty': '1',
+            'x-global-dataset': source,
+          });
+          await caches.default.put(cacheKey, empty.clone()).catch(() => {});
+          return empty;
+        }
+        return json({ error: 'Expected land-cover tile is missing from the completed global dataset' }, 503);
+      }
+
+      const response = new Response(object.body, {
+        status: 200,
+        headers: {
+          'content-type': 'application/gzip',
+          'cache-control': 'public, max-age=31536000, immutable',
+          'x-global-dataset': kind === 'hydro' ? source : 'landcover',
+          'x-global-tile-format': kind === 'hydro' ? 'geojson-gzip' : 'uint8-gzip',
+        },
       });
-      ctx.waitUntil(caches.default.put(cacheKey, empty.clone()).catch(() => {}));
-      return empty;
-    }
-    return json({ error: 'Expected land-cover tile is missing from the completed global dataset' }, 503);
+      await caches.default.put(cacheKey, response.clone()).catch(() => {});
+      return response;
+    })();
+    inFlightTerrainTiles.set(cacheKey.url, pending);
   }
 
-  const response = new Response(object.body, {
-    status: 200,
-    headers: {
-      'content-type': 'application/gzip',
-      'cache-control': 'public, max-age=31536000, immutable',
-      'x-global-dataset': kind === 'hydro' ? source : 'landcover',
-      'x-global-tile-format': kind === 'hydro' ? 'geojson-gzip' : 'uint8-gzip',
-    },
-  });
-  ctx.waitUntil(caches.default.put(cacheKey, response.clone()).catch(() => {}));
-  return response;
+  try { return (await pending).clone(); }
+  finally { if (inFlightTerrainTiles.get(cacheKey.url) === pending) inFlightTerrainTiles.delete(cacheKey.url); }
 }
 
 /* ------------------------------------------------------------------ DEM */
