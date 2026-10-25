@@ -129,7 +129,7 @@ async function handleDem(request, url, ctx) {
 /* -------------------------------------- ArcGIS terrain feature proxy */
 const ARCGIS = {
   water: 'https://services2.arcgis.com/IsDCghZ73NgoYoz5/ArcGIS/rest/services/World_Water_Bodies_World/FeatureServer/0/query',
-  rivers: 'https://services.arcgis.com/Z58T9dmhcpCmous1/arcgis/rest/services/Detailed_Linear_Hydrology/FeatureServer/0/query',
+  rivers: 'https://services.arcgis.com/Z58T9dmhcpCmous1/arcgis/rest/services/Detailed_Linear_Hydrology/FeatureServer/1/query',
   land: 'https://services.arcgis.com/8df8p0NlLFEShl0r/arcgis/rest/services/Land_Cover/FeatureServer/0/query',
 };
 
@@ -137,7 +137,7 @@ function arcgisQueryUrl(endpoint, bbox, source) {
   const u = new URL(endpoint);
   const p = {
     where: '1=1',
-    outFields: source === 'land' ? 'Land_cover' : '*',
+    outFields: '*',
     geometry: [bbox.w, bbox.s, bbox.e, bbox.n].join(','),
     geometryType: 'esriGeometryEnvelope',
     spatialRel: 'esriSpatialRelIntersects',
