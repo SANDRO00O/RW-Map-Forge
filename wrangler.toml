@@ -1,0 +1,9 @@
+name = "rw-map-forge"
+main = "src/worker.js"
+compatibility_date = "2025-03-01"
+
+# Static site (public/) is served by Workers Static Assets; requests that do not match a file
+# (for example /api/*) are routed to src/worker.js.
+[assets]
+directory = "./public"
+binding = "ASSETS"

@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101319">
+<meta name="description" content="Generate playable Rusted Warfare maps from real-world terrain, water and land cover. Pick any place on Earth, preview it, place players and resources, and export a TMX map.">
+<title>RW Map Forge - Rusted Warfare maps from the real world</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+
+<!-- Icon sprite: every icon in the interface is drawn here -->
+<svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+  <symbol id="i-logo" viewBox="0 0 32 32"><path d="M16 2.5l11.7 6.75v13.5L16 29.5 4.3 22.75V9.25L16 2.5z"/><path d="M8.5 21l5-8.2 3.2 4.6 2.3-3.2 4.5 6.8"/><path d="M16 2.5v4.2M27.7 9.25l-3.6 2.1M4.3 9.25l3.6 2.1"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.4"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 16.5l9 5 9-5"/></symbol>
+  <symbol id="i-locate" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+  <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+  <symbol id="i-move" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24"><path d="M6 21V4M6 4h11l-2 4 2 4H6"/></symbol>
+  <symbol id="i-gem" viewBox="0 0 24 24"><path d="M12 3.5l8 5.5-8 11.5L4 9l8-5.5z"/><path d="M4 9h16M9 9l3 11.5L15 9"/></symbol>
+  <symbol id="i-tree" viewBox="0 0 24 24"><path d="M12 3l6 8h-3l4 6H5l4-6H6l6-8z"/><path d="M12 17v4"/></symbol>
+  <symbol id="i-eraser" viewBox="0 0 24 24"><path d="M7 20h12"/><path d="M5.6 13.4l7.8-7.8a2 2 0 0 1 2.8 0l2.2 2.2a2 2 0 0 1 0 2.8L11.4 18H8l-2.4-2.4a2 2 0 0 1 0-2.2z"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V5M7 9l5-5 5 5M5 20h14"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="1.7"/><path d="M4 18l5-5 4 4 3-3 4 4"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5l11 7-11 7V5z"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.8h.01"/></symbol>
+  <symbol id="i-mountain" viewBox="0 0 24 24"><path d="M3 19l6-11 4 6 3-4 5 9H3z"/></symbol>
+  <symbol id="i-drop" viewBox="0 0 24 24"><path d="M12 3c4 5 6 8 6 11a6 6 0 0 1-12 0c0-3 2-6 6-11z"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 20a6 6 0 0 1 12 0M16 5.2a3.2 3.2 0 0 1 0 5.6M18 14.2a6 6 0 0 1 3 5.8"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M5 7h14M10 7V4.5h4V7M7 7l1 13h8l1-13"/></symbol>
+  <symbol id="i-wand" viewBox="0 0 24 24"><path d="M4 20L15 9"/><path d="M15 3l1 2.5L18.5 6.5 16 7.5 15 10l-1-2.5L11.5 6.5 14 5.5 15 3z"/><path d="M19 13l.7 1.6 1.6.7-1.6.7L19 17.6l-.7-1.6-1.6-.7 1.6-.7L19 13z"/></symbol>
+  <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/></symbol>
+  <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7V3z"/><path d="M14 3v5h5"/></symbol>
+  <symbol id="i-dice" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3.5"/><path d="M8.5 8.5h.01M15.5 8.5h.01M12 12h.01M8.5 15.5h.01M15.5 15.5h.01"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3.5l9.5 16.5h-19L12 3.5z"/><path d="M12 10v4.5M12 17.2h.01"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="M12 3l8.5 4.5v9L12 21l-8.5-4.5v-9L12 3z"/><path d="M3.5 7.5L12 12l8.5-4.5M12 12v9"/></symbol>
+  <symbol id="i-spinner" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9"/></symbol>
+</svg>
+
+<div id="app">
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="RW Map Forge home">
+      <svg class="ic brand-mark"><use href="#i-logo"/></svg>
+      <span class="brand-text">RW Map <b>Forge</b></span>
+    </a>
+    <nav class="steps" id="steps" aria-label="Progress">
+      <button type="button" class="step is-active" data-view="location"><span class="step-n">1</span><span class="step-t">Location</span></button>
+      <span class="step-sep"></span>
+      <button type="button" class="step" data-view="settings"><span class="step-n">2</span><span class="step-t">Terrain</span></button>
+      <span class="step-sep"></span>
+      <button type="button" class="step" data-view="editor" disabled><span class="step-n">3</span><span class="step-t">Editor</span></button>
+    </nav>
+    <button type="button" class="icon-btn" id="btnAbout" data-tip="About and data sources" aria-label="About and data sources"><svg class="ic"><use href="#i-info"/></svg></button>
+  </header>
+
+  <main id="main">
+    <!-- ============ 1. Location ============ -->
+    <section class="view is-active" id="view-location" aria-label="Choose a location">
+      <div class="map-host" id="map"></div>
+
+      <div class="float search" id="searchBox">
+        <svg class="ic search-ic"><use href="#i-search"/></svg>
+        <input class="text-input search-input" id="searchInput" type="text" placeholder="Search a city, mountain or coast" autocomplete="off" spellcheck="false" aria-label="Search places">
+        <button type="button" class="icon-btn small" id="searchClear" aria-label="Clear search" hidden><svg class="ic"><use href="#i-x"/></svg></button>
+        <div class="search-results" id="searchResults" role="listbox" hidden></div>
+      </div>
+
+      <div class="float map-tools">
+        <button type="button" class="tool-btn" id="btnLayers" data-tip="Map style" data-tip-side="left" aria-label="Map style"><svg class="ic"><use href="#i-layers"/></svg></button>
+        <button type="button" class="tool-btn" id="btnLocate" data-tip="My location" data-tip-side="left" aria-label="My location"><svg class="ic"><use href="#i-locate"/></svg></button>
+        <div class="tool-group">
+          <button type="button" class="tool-btn" id="mapZoomIn" data-tip="Zoom in" data-tip-side="left" aria-label="Zoom in"><svg class="ic"><use href="#i-plus"/></svg></button>
+          <button type="button" class="tool-btn" id="mapZoomOut" data-tip="Zoom out" data-tip-side="left" aria-label="Zoom out"><svg class="ic"><use href="#i-minus"/></svg></button>
+        </div>
+      </div>
+
+      <div class="attrib" id="mapAttrib"></div>
+
+      <div class="dock card" id="dock">
+        <button type="button" class="dock-toggle" id="dockToggle" aria-expanded="false"><span>Area options</span><svg class="ic"><use href="#i-chevron-down"/></svg></button>
+        <div class="dock-grid">
+          <div class="field">
+            <span class="label">Centre</span>
+            <div class="pair">
+              <input class="text-input mono" id="inLat" type="text" inputmode="decimal" aria-label="Latitude" spellcheck="false">
+              <input class="text-input mono" id="inLon" type="text" inputmode="decimal" aria-label="Longitude" spellcheck="false">
+            </div>
+          </div>
+          <div class="field">
+            <span class="label">Map size (tiles)</span>
+            <div class="pair">
+              <div class="stepper" id="stW" aria-label="Width"></div>
+              <div class="stepper" id="stH" aria-label="Height"></div>
+            </div>
+          </div>
+          <div class="field">
+            <span class="label">Detail</span>
+            <div class="select" id="selScale"></div>
+          </div>
+          <div class="field">
+            <span class="label">Presets</span>
+            <div class="segmented" id="segPreset"></div>
+          </div>
+        </div>
+        <div class="dock-foot">
+          <p class="extent" id="extent"></p>
+          <button type="button" class="btn primary" id="btnToSettings"><span>Continue</span><svg class="ic"><use href="#i-arrow-right"/></svg></button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 2. Terrain settings ============ -->
+    <section class="view" id="view-settings" aria-label="Terrain settings">
+      <div class="scroll">
+        <div class="page">
+          <div class="page-head">
+            <h1>Terrain settings</h1>
+            <p>Tune how real elevation, water and land cover become Rusted Warfare tiles.</p>
+          </div>
+          <div class="cards" id="settingsCards"></div>
+        </div>
+      </div>
+      <div class="action-bar">
+        <button type="button" class="btn ghost" id="btnBackLocation"><svg class="ic"><use href="#i-arrow-left"/></svg><span>Location</span></button>
+        <button type="button" class="btn primary" id="btnGenerate"><svg class="ic"><use href="#i-play"/></svg><span>Generate map</span></button>
+      </div>
+    </section>
+
+    <!-- ============ 3. Editor ============ -->
+    <section class="view" id="view-editor" aria-label="Map editor">
+      <div class="editor">
+        <div class="stage" id="stage">
+          <canvas id="cv" aria-label="Map preview"></canvas>
+
+          <div class="float tools" id="tools" role="toolbar" aria-label="Editor tools">
+            <button type="button" class="tool-btn is-on" data-tool="pan" data-tip="Pan  (V)" data-tip-side="right" aria-label="Pan"><svg class="ic"><use href="#i-move"/></svg></button>
+            <button type="button" class="tool-btn" data-tool="spawn" data-tip="Place player  (P)" data-tip-side="right" aria-label="Place player"><svg class="ic"><use href="#i-flag"/></svg></button>
+            <button type="button" class="tool-btn" data-tool="pool" data-tip="Place resource  (R)" data-tip-side="right" aria-label="Place resource"><svg class="ic"><use href="#i-gem"/></svg></button>
+            <button type="button" class="tool-btn" data-tool="tree" data-tip="Toggle tree  (T)" data-tip-side="right" aria-label="Toggle tree"><svg class="ic"><use href="#i-tree"/></svg></button>
+            <button type="button" class="tool-btn" data-tool="erase" data-tip="Erase  (E)" data-tip-side="right" aria-label="Erase"><svg class="ic"><use href="#i-eraser"/></svg></button>
+          </div>
+
+          <div class="float zoom">
+            <button type="button" class="tool-btn" id="edZoomIn" data-tip="Zoom in" data-tip-side="left" aria-label="Zoom in"><svg class="ic"><use href="#i-plus"/></svg></button>
+            <button type="button" class="tool-btn" id="edZoomOut" data-tip="Zoom out" data-tip-side="left" aria-label="Zoom out"><svg class="ic"><use href="#i-minus"/></svg></button>
+            <button type="button" class="tool-btn" id="edFit" data-tip="Fit to screen  (F)" data-tip-side="left" aria-label="Fit to screen"><svg class="ic"><use href="#i-fit"/></svg></button>
+          </div>
+
+          <div class="float readout" id="readout"><span id="cellInfo">Move over the map</span></div>
+          <button type="button" class="btn small panel-toggle" id="btnPanel"><svg class="ic"><use href="#i-panel"/></svg><span>Panel</span></button>
+        </div>
+
+        <aside class="panel" id="panel" aria-label="Map options">
+          <div class="panel-head">
+            <div>
+              <h2>Map editor</h2>
+              <p id="summary" class="muted"></p>
+            </div>
+            <button type="button" class="icon-btn small panel-close" id="btnPanelClose" aria-label="Close panel"><svg class="ic"><use href="#i-x"/></svg></button>
+          </div>
+          <div class="panel-body">
+            <section class="group">
+              <h3><svg class="ic"><use href="#i-users"/></svg>Players</h3>
+              <div class="teams" id="teams" role="radiogroup" aria-label="Player slot"></div>
+              <p class="muted small-text">Choose a slot, pick the player tool and tap the map. Land is levelled around the base when needed.</p>
+              <div class="row">
+                <div class="stepper" id="stPlayers" aria-label="Player count"></div>
+                <button type="button" class="btn" id="btnAutoPlayers"><svg class="ic"><use href="#i-wand"/></svg><span>Auto place</span></button>
+              </div>
+              <button type="button" class="btn ghost full" id="btnClearPlayers"><svg class="ic"><use href="#i-trash"/></svg><span>Clear players</span></button>
+            </section>
+
+            <section class="group">
+              <h3><svg class="ic"><use href="#i-gem"/></svg>Resources</h3>
+              <div class="row">
+                <div class="stepper" id="stNeutral" aria-label="Neutral resource count"></div>
+                <button type="button" class="btn" id="btnAutoPools"><svg class="ic"><use href="#i-wand"/></svg><span>Auto place</span></button>
+              </div>
+              <button type="button" class="btn ghost full" id="btnClearPools"><svg class="ic"><use href="#i-trash"/></svg><span>Clear resources</span></button>
+            </section>
+
+            <section class="group">
+              <h3><svg class="ic"><use href="#i-sliders"/></svg>View</h3>
+              <div class="toggle-row"><span>Hillshade when zoomed out</span><button type="button" class="switch" id="swHill"></button></div>
+              <div class="toggle-row"><span>Level ground around players</span><button type="button" class="switch" id="swFlat"></button></div>
+              <div class="legend" id="legend"></div>
+            </section>
+          </div>
+          <div class="panel-foot">
+            <button type="button" class="btn ghost" id="btnEditSettings"><svg class="ic"><use href="#i-arrow-left"/></svg><span>Settings</span></button>
+            <button type="button" class="btn primary" id="btnExport"><svg class="ic"><use href="#i-download"/></svg><span>Export</span></button>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <div class="overlay" id="progress" hidden>
+    <div class="dialog progress-card" role="dialog" aria-modal="true" aria-labelledby="progTitle">
+      <h2 id="progTitle">Generating map</h2>
+      <ol class="prog-steps" id="progSteps"></ol>
+      <div class="bar"><div class="bar-fill" id="progBar"></div></div>
+      <div class="log" id="progLog" aria-live="polite"></div>
+      <div class="dialog-actions" id="progActions"></div>
+    </div>
+  </div>
+
+  <div id="popovers"></div>
+  <div id="toasts" aria-live="polite"></div>
+  <div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+</div>
+
+<script src="/js/ui.js"></script>
+<script src="/js/map.js"></script>
+<script src="/js/gen.js"></script>
+<script src="/js/editor.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

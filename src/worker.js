@@ -1,0 +1,219 @@
+/**
+ * RW Map Forge - Cloudflare Worker
+ *
+ * Static files are served by Workers Static Assets (see wrangler.toml); this Worker only handles /api/*:
+ *
+ *   GET  /api/dem?z=&x0=&x1=&y0=&y1=   batch of Terrarium elevation tiles in ONE round trip (fetched in parallel at the edge)
+ *   POST /api/osm                       Overpass proxy: hedged requests across mirrors + edge cache
+ *   GET  /api/geocode?q=                Nominatim proxy with a proper User-Agent + edge cache
+ *   GET  /api/health
+ *
+ * The Worker does no heavy computation (free plan CPU limit is ~10 ms per request); all terrain processing
+ * runs in a Web Worker inside the visitor's browser.
+ */
+
+const UA = 'RWMapForge/1.0 (Rusted Warfare map generator; https://workers.cloudflare.com)';
+const DEM_HOSTS = [
+  'https://s3.amazonaws.com/elevation-tiles-prod/terrarium',
+  'https://elevation-tiles-prod.s3.amazonaws.com/terrarium',
+];
+const OVERPASS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+];
+const MAX_TILES = 40; // the free plan allows 50 subrequests per invocation
+const DAY = 86400;
+
+const json = (obj, status = 200, extra = {}) =>
+  new Response(JSON.stringify(obj), {
+    status,
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...extra },
+  });
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    try {
+      if (url.pathname === '/api/health') return json({ ok: true });
+      if (url.pathname === '/api/dem' && request.method === 'GET') return await handleDem(request, url, ctx);
+      if (url.pathname === '/api/osm' && request.method === 'POST') return await handleOsm(request, ctx);
+      if (url.pathname === '/api/geocode' && request.method === 'GET') return await handleGeocode(url, ctx);
+      if (url.pathname.startsWith('/api/')) return json({ error: 'Not found' }, 404);
+      if (env && env.ASSETS) return env.ASSETS.fetch(request);
+      return new Response('Not found', { status: 404 });
+    } catch (err) {
+      return json({ error: String((err && err.message) || err) }, 500);
+    }
+  },
+};
+
+/* ------------------------------------------------------------------ DEM */
+
+function int(url, name, min, max) {
+  const v = Number(url.searchParams.get(name));
+  if (!Number.isInteger(v) || v < min || v > max) throw new Error(`Invalid parameter: ${name}`);
+  return v;
+}
+
+async function fetchTile(z, x, y) {
+  for (const host of DEM_HOSTS) {
+    try {
+      const r = await fetch(`${host}/${z}/${x}/${y}.png`, {
+        headers: { 'user-agent': UA },
+        cf: { cacheTtl: 30 * DAY, cacheEverything: true },
+      });
+      if (r.ok) return new Uint8Array(await r.arrayBuffer());
+    } catch (_) { /* try the next host */ }
+  }
+  return null;
+}
+
+/**
+ * Response body: for ty = y0..y1, for tx = x0..x1 (row-major), one record per tile:
+ *   uint32 little-endian byteLength (0 when the tile is missing) followed by the PNG bytes.
+ */
+async function handleDem(request, url, ctx) {
+  const z = int(url, 'z', 0, 15);
+  const max = (1 << z) - 1;
+  const x0 = int(url, 'x0', 0, max), x1 = int(url, 'x1', 0, max);
+  const y0 = int(url, 'y0', 0, max), y1 = int(url, 'y1', 0, max);
+  if (x1 < x0 || y1 < y0) throw new Error('Invalid tile range');
+  const count = (x1 - x0 + 1) * (y1 - y0 + 1);
+  if (count > MAX_TILES) throw new Error(`Too many tiles (max ${MAX_TILES})`);
+
+  const cache = caches.default;
+  const key = new Request(url.toString(), { method: 'GET' });
+  const hit = await cache.match(key);
+  if (hit) return hit;
+
+  const jobs = [];
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) jobs.push(fetchTile(z, x, y));
+  const tiles = await Promise.all(jobs);
+  const present = tiles.filter(Boolean).length;
+  if (!present) return json({ error: 'Elevation tiles are unavailable right now' }, 502);
+
+  let total = 0;
+  for (const t of tiles) total += 4 + (t ? t.length : 0);
+  const out = new Uint8Array(total);
+  const dv = new DataView(out.buffer);
+  let pos = 0;
+  for (const t of tiles) {
+    dv.setUint32(pos, t ? t.length : 0, true);
+    pos += 4;
+    if (t) { out.set(t, pos); pos += t.length; }
+  }
+  const res = new Response(out, {
+    headers: {
+      'content-type': 'application/octet-stream',
+      'cache-control': `public, max-age=${7 * DAY}`,
+      'x-tiles-present': String(present),
+      'x-tiles-total': String(count),
+    },
+  });
+  if (present === count) ctx.waitUntil(cache.put(key, res.clone()));
+  return res;
+}
+
+/* ------------------------------------------------------------------ OSM */
+
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** Starts mirror 0 now, mirror 1 after 9 s and mirror 2 after 20 s (or immediately when the previous one fails). */
+function hedgedOverpass(query) {
+  return new Promise((resolve, reject) => {
+    const controllers = [];
+    const started = new Set();
+    let finished = false;
+    let failures = 0;
+    let lastError = null;
+
+    const launch = (i) => {
+      if (finished || i >= OVERPASS.length || started.has(i)) return;
+      started.add(i);
+      const ctl = new AbortController();
+      controllers.push(ctl);
+      const timer = setTimeout(() => ctl.abort(), 55000);
+      fetch(OVERPASS[i], {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded', 'user-agent': UA },
+        body: 'data=' + encodeURIComponent(query),
+        signal: ctl.signal,
+      })
+        .then((r) => {
+          clearTimeout(timer);
+          const type = r.headers.get('content-type') || '';
+          if (r.ok && type.includes('json') && !finished) {
+            finished = true;
+            controllers.forEach((c) => c !== ctl && c.abort());
+            resolve(r);
+          } else if (!finished) {
+            throw new Error(`Overpass mirror ${i} replied ${r.status}`);
+          }
+        })
+        .catch((err) => {
+          clearTimeout(timer);
+          if (finished) return;
+          lastError = err;
+          failures++;
+          if (failures >= OVERPASS.length) reject(lastError);
+          else launch(i + 1);
+        });
+    };
+
+    launch(0);
+    setTimeout(() => launch(1), 9000);
+    setTimeout(() => launch(2), 20000);
+  });
+}
+
+async function handleOsm(request, ctx) {
+  const query = await request.text();
+  if (!query || query.length > 20000 || !query.startsWith('[out:json]')) return json({ error: 'Invalid query' }, 400);
+  const cache = caches.default;
+  const key = new Request('https://osm-cache.invalid/' + (await sha256Hex(query)), { method: 'GET' });
+  const hit = await cache.match(key);
+  if (hit) return hit;
+
+  let upstream;
+  try {
+    upstream = await hedgedOverpass(query);
+  } catch (err) {
+    return json({ error: 'All Overpass mirrors failed or timed out: ' + ((err && err.message) || err) }, 502);
+  }
+  const res = new Response(upstream.body, {
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': `public, max-age=${DAY}` },
+  });
+  ctx.waitUntil(cache.put(key, res.clone()));
+  return res;
+}
+
+/* -------------------------------------------------------------- Geocode */
+
+async function handleGeocode(url, ctx) {
+  const q = (url.searchParams.get('q') || '').trim();
+  if (q.length < 2 || q.length > 120) return json({ error: 'Query must be 2-120 characters' }, 400);
+  const cache = caches.default;
+  const key = new Request(url.origin + '/api/geocode?q=' + encodeURIComponent(q.toLowerCase()), { method: 'GET' });
+  const hit = await cache.match(key);
+  if (hit) return hit;
+
+  const r = await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&addressdetails=0&q=' + encodeURIComponent(q), {
+    headers: { 'user-agent': UA, accept: 'application/json' },
+    cf: { cacheTtl: DAY, cacheEverything: true },
+  });
+  if (!r.ok) return json({ error: 'Geocoder is unavailable' }, 502);
+  const raw = await r.json();
+  const results = (Array.isArray(raw) ? raw : []).map((p) => ({
+    name: String(p.display_name || '').slice(0, 160),
+    lat: Number(p.lat),
+    lon: Number(p.lon),
+    kind: String(p.type || ''),
+  })).filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon));
+  const res = json({ results }, 200, { 'cache-control': `public, max-age=${DAY}` });
+  ctx.waitUntil(cache.put(key, res.clone()));
+  return res;
+}
