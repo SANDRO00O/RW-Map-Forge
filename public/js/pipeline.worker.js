@@ -1,8 +1,9 @@
 /* RW Map Forge - generation pipeline (Web Worker).
  * Keeps the UI responsive: downloads elevation + OSM data, classifies terrain and builds the TMX file off the main thread. */
 'use strict';
-importScripts('/js/gen.js');
+importScripts('/js/gen.js', '/js/arcgis.js');
 const G = self.RWGen;
+const A = self.RWArcGIS;
 
 const post = (type, data, transfer) => self.postMessage(Object.assign({ type: type }, data || {}), transfer || []);
 const progress = (step, msg, pct) => post('progress', { step: step, msg: msg, pct: pct });
@@ -127,34 +128,53 @@ async function osmRequest(label, query) {
   return json.elements || [];
 }
 
+async function fetchArcgisSource(source, bbox) {
+  const res = await fetch('/api/terrain-features', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bbox: bbox, source: source }),
+  });
+  if (!res.ok) throw new Error(await errorFrom(res, 'ArcGIS ' + source + ' request failed'));
+  const data = await res.json();
+  if (data && data.error) throw new Error(typeof data.error === 'string' ? data.error : (data.error.message || 'ArcGIS API error'));
+  if (!data || !Array.isArray(data.features)) throw new Error('ArcGIS ' + source + ' response did not contain GeoJSON features');
+  return data.features;
+}
+
 async function loadOsm(geo, o) {
   const bb = geo.bbox();
   let elements = [], successes = 0;
+  const sources = [];
+  if (o.water) {
+    sources.push({ source: 'water', label: 'water bodies', kind: 'water' });
+    sources.push({ source: 'rivers', label: 'linear rivers', kind: 'rivers' });
+  }
+  if (o.land) sources.push({ source: 'land', label: 'land cover', kind: 'land' });
 
-  if (o.water || o.land) {
+  const settled = await Promise.all(sources.map(async (s) => {
     try {
-      const what = [o.water ? 'water bodies and rivers' : '', o.land ? 'land cover' : ''].filter(Boolean).join(' and ');
-      progress('osm', 'Downloading ' + what + ' from ArcGIS data services', 0.25);
-      const res = await fetch('/api/terrain-features', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ bbox: bb, water: !!o.water, land: !!o.land }),
-      });
-      if (!res.ok) throw new Error(await errorFrom(res, 'ArcGIS terrain feature request failed'));
-      const data = await res.json();
-      if (!Array.isArray(data.elements)) throw new Error('ArcGIS response did not contain map features');
-      elements = elements.concat(data.elements);
-      successes++;
-      let msg = 'Loaded ' + data.elements.length + ' features from ArcGIS';
-      if (Array.isArray(data.warnings) && data.warnings.length) msg += '; partial data: ' + data.warnings.join('; ');
-      progress('osm', msg, 0.43);
+      progress('osm', 'Downloading ' + s.label + ' from ArcGIS', 0.25);
+      const features = await fetchArcgisSource(s.source, bb);
+      const converted = [];
+      for (let i = 0; i < features.length; i++) {
+        converted.push(...A.featureToElements(features[i], s.kind, bb, (i + 1) * 100000));
+      }
+      progress('osm', 'Loaded ' + converted.length + ' ' + s.label + ' features from ArcGIS', 0.42);
+      return { success: true, label: s.label, elements: converted };
     } catch (err) {
-      progress('osm', 'Skipped ArcGIS water/land cover: ' + err.message, 0.4);
+      return { success: false, label: s.label, error: err.message || String(err) };
+    }
+  }));
+  for (const item of settled) {
+    if (item.success) {
+      elements = elements.concat(item.elements);
+      successes++;
+    } else {
+      progress('osm', 'Skipped ' + item.label + ': ' + item.error, 0.44);
     }
   }
 
-  // Keep the optional roads overlay separate and lightweight. Water and land cover
-  // no longer depend on the public Overpass servers.
+  // The optional roads overlay remains a small, separate Overpass request.
   if (o.roads) {
     try {
       const roadQuery = G.buildOverpassQuery(bb, { water: false, land: false, roads: true, timeout: 20 });
@@ -166,7 +186,6 @@ async function loadOsm(geo, o) {
       progress('osm', 'Skipped major roads: ' + err.message, 0.48);
     }
   }
-
   return successes ? { elements: elements } : null;
 }
 
