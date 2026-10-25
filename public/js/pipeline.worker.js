@@ -145,8 +145,68 @@ async function fetchArcgisSource(source, bbox) {
   };
 }
 
+function terrainCellsForBounds(bbox, maxCells = 16) {
+  const round = (v) => Number(v.toFixed(6));
+  const make = (step) => {
+    const minX = Math.floor(bbox.w / step);
+    const maxX = Math.ceil(bbox.e / step) - 1;
+    const minY = Math.floor(bbox.s / step);
+    const maxY = Math.ceil(bbox.n / step) - 1;
+    const cells = [];
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        cells.push({
+          s: round(y * step),
+          w: round(x * step),
+          n: round((y + 1) * step),
+          e: round((x + 1) * step),
+        });
+      }
+    }
+    return cells;
+  };
+
+  let step = 0.25;
+  let cells = make(step);
+  while (cells.length > maxCells && step < 8) {
+    step *= 2;
+    cells = make(step);
+  }
+  if (cells.length > maxCells) throw new Error('Selected map covers too many terrain cells; reduce map dimensions or tile size.');
+  return { cells: cells, step: step };
+}
+
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const count = Math.min(limit, items.length);
+  await Promise.all(Array.from({ length: count }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+    }
+  }));
+  return out;
+}
+
+function dedupeArcgisFeatures(features) {
+  const seen = new Set();
+  return features.filter((feature) => {
+    const attrs = feature && (feature.attributes || feature.properties) || {};
+    const idEntry = Object.entries(attrs).find(([key, value]) =>
+      value != null && /^(objectid|fid|oid)(?:_\d+)?$/i.test(key));
+    const key = idEntry
+      ? 'id:' + idEntry[0].toLowerCase() + ':' + String(idEntry[1])
+      : 'geom:' + JSON.stringify(feature && feature.geometry || {});
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 async function loadOsm(geo, o) {
   const bb = geo.bbox();
+  const grid = terrainCellsForBounds(bb);
   let elements = [], successes = 0;
   const sources = [];
   if (o.water) {
@@ -157,19 +217,39 @@ async function loadOsm(geo, o) {
 
   const settled = await Promise.all(sources.map(async (s) => {
     try {
-      progress('osm', 'Loading ' + s.label + ' (self-hosted cache first)', 0.25);
-      const result = await fetchArcgisSource(s.source, bb);
-      const features = result.features;
-      const converted = [];
-      for (let i = 0; i < features.length; i++) {
-        converted.push(...A.featureToElements(features[i], s.kind, bb, (i + 1) * 100000));
+      progress('osm', 'Loading ' + s.label + ' from the persistent terrain grid (' +
+        grid.cells.length + ' cell(s))', 0.25);
+      const cellResults = await mapLimit(grid.cells, 4, async (cell) => {
+        try {
+          return { cell: cell, result: await fetchArcgisSource(s.source, cell), error: null };
+        } catch (err) {
+          return { cell: cell, result: null, error: err.message || String(err) };
+        }
+      });
+
+      const okay = cellResults.filter((x) => x.result);
+      const failed = cellResults.filter((x) => x.error);
+      if (!okay.length) {
+        throw new Error(failed.map((x) => x.error).join(' | ') || 'No terrain cells could be loaded');
       }
-      const cacheLabel = result.cacheStatus === 'HIT' ? 'R2 cache hit'
-        : result.cacheStatus === 'MISS' ? 'fetched and saved to R2'
-        : result.cacheStatus === 'EDGE-HIT' ? 'edge cache hit'
-        : 'cache ' + result.cacheStatus;
-      progress('osm', 'Loaded ' + converted.length + ' ' + s.label + ' feature(s) from ' +
-        features.length + ' raw record(s); ' + cacheLabel, 0.42);
+
+      const rawFeatures = dedupeArcgisFeatures(okay.flatMap((x) => x.result.features));
+      const converted = [];
+      for (let i = 0; i < rawFeatures.length; i++) {
+        converted.push(...A.featureToElements(rawFeatures[i], s.kind, bb, (i + 1) * 100000));
+      }
+
+      const statuses = okay.map((x) => x.result.cacheStatus);
+      const cacheLabel = statuses.every((v) => v === 'HIT') ? 'R2 cache hit'
+        : statuses.some((v) => v === 'MISS') ? 'fetched and saved to R2'
+        : statuses.some((v) => v === 'EDGE-HIT') ? 'edge cache hit'
+        : 'cache ' + (statuses[0] || 'UNKNOWN');
+      let msg = 'Loaded ' + converted.length + ' ' + s.label + ' feature(s) from ' +
+        rawFeatures.length + ' raw record(s); ' + cacheLabel;
+      if (failed.length) msg += '; ' + failed.length + ' cell(s) unavailable';
+      progress('osm', msg, 0.42);
+      if (failed.length) progress('osm', 'Partial terrain data for ' + s.label + ': ' +
+        failed.map((x) => x.error).join(' | '), 0.44);
       return { success: true, label: s.label, elements: converted };
     } catch (err) {
       return { success: false, label: s.label, error: err.message || String(err) };
@@ -184,7 +264,7 @@ async function loadOsm(geo, o) {
     }
   }
 
-  // The optional roads overlay remains a small, separate Overpass request.
+  // The optional roads overlay remains a separate Overpass request.
   if (o.roads) {
     try {
       const roadQuery = G.buildOverpassQuery(bb, { water: false, land: false, roads: true, timeout: 20 });
@@ -198,7 +278,6 @@ async function loadOsm(geo, o) {
   }
   return successes ? { elements: elements } : null;
 }
-
 
 /* ---------------------------------------------------------------- Generate */
 
