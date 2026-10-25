@@ -108,12 +108,16 @@ def r2_client():
 
 def put_bytes(client, key: str, body: bytes, content_type: str) -> None:
     global _uploaded_bytes
+    # Reserve the byte budget under a lock, but upload outside the lock so the
+    # tile workers can use R2's throughput in parallel.
     with _upload_lock:
         if _uploaded_bytes + len(body) > MAX_UPLOAD_BYTES:
             raise RuntimeError(
                 f"Import would exceed MAX_UPLOAD_GB={MAX_UPLOAD_BYTES / (1024 ** 3):.1f}; "
                 "raise the GitHub Actions variable only after reviewing R2 pricing."
             )
+        _uploaded_bytes += len(body)
+    try:
         client.put_object(
             Bucket=BUCKET,
             Key=key,
@@ -121,7 +125,10 @@ def put_bytes(client, key: str, body: bytes, content_type: str) -> None:
             ContentType=content_type,
             CacheControl="public, max-age=31536000, immutable",
         )
-        _uploaded_bytes += len(body)
+    except Exception:
+        with _upload_lock:
+            _uploaded_bytes -= len(body)
+        raise
 
 def mark_manifest(client, ready: bool, **extra) -> None:
     manifest = {
@@ -211,7 +218,11 @@ def ogr_tile(
     if selected_fields:
         args += ["-select", selected_fields]
 
-    subprocess.run(args, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    proc = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    if proc.returncode:
+        tmp_json.unlink(missing_ok=True)
+        detail = (proc.stderr or "").strip()[-2000:]
+        raise RuntimeError(f"ogr2ogr failed for {source} cell {x},{y} (exit {proc.returncode}): {detail}")
     try:
         raw = tmp_json.read_bytes()
         data = json.loads(raw)
