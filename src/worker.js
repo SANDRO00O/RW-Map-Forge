@@ -17,10 +17,12 @@ const DEM_HOSTS = [
   'https://s3.amazonaws.com/elevation-tiles-prod/terrarium',
   'https://elevation-tiles-prod.s3.amazonaws.com/terrarium',
 ];
+// Use independent, global Overpass operators. kumi.systems is the old
+// hostname for private.coffee, so listing both does not provide a real fallback.
 const OVERPASS = [
-  'https://overpass-api.de/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
   'https://overpass.private.coffee/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass-api.de/api/interpreter',
 ];
 const MAX_TILES = 40; // the free plan allows 50 subrequests per invocation
 const DAY = 86400;
