@@ -677,7 +677,7 @@
     }
     if (o.roads) q.push('way["highway"~"^(motorway|trunk|primary|secondary|tertiary)$"]' + B + ';');
     if (!q.length) return null;
-    return '[out:json][timeout:' + (o.timeout || 50) + '];\n(\n' + q.join('\n') + '\n);\nout geom;';
+    return '[out:json][timeout:' + (o.timeout || 25) + '];\n(\n' + q.join('\n') + '\n);\nout geom' + B + ';';
   }
 
   // ------------------------------------------------------------ TMX exporter ---
