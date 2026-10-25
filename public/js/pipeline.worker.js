@@ -128,16 +128,48 @@ async function osmRequest(label, query) {
 }
 
 async function loadOsm(geo, o) {
-  const bb = geo.bbox(), parts = [];
-  if (o.water) parts.push(['water', G.buildOverpassQuery(bb, { water: true, timeout: 25 })]);
-  if (o.land || o.roads) parts.push(['land cover', G.buildOverpassQuery(bb, { land: o.land, roads: o.roads, timeout: 25 })]);
-  let elements = [], ok = 0;
-  for (const p of parts) {
-    try { elements = elements.concat(await osmRequest(p[0], p[1])); ok++; }
-    catch (err) { progress('osm', 'Skipped ' + p[0] + ': ' + err.message, 0.4); }
+  const bb = geo.bbox();
+  let elements = [], successes = 0;
+
+  if (o.water || o.land) {
+    try {
+      const what = [o.water ? 'water bodies and rivers' : '', o.land ? 'land cover' : ''].filter(Boolean).join(' and ');
+      progress('osm', 'Downloading ' + what + ' from ArcGIS data services', 0.25);
+      const res = await fetch('/api/terrain-features', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ bbox: bb, water: !!o.water, land: !!o.land }),
+      });
+      if (!res.ok) throw new Error(await errorFrom(res, 'ArcGIS terrain feature request failed'));
+      const data = await res.json();
+      if (!Array.isArray(data.elements)) throw new Error('ArcGIS response did not contain map features');
+      elements = elements.concat(data.elements);
+      successes++;
+      let msg = 'Loaded ' + data.elements.length + ' features from ArcGIS';
+      if (Array.isArray(data.warnings) && data.warnings.length) msg += '; partial data: ' + data.warnings.join('; ');
+      progress('osm', msg, 0.43);
+    } catch (err) {
+      progress('osm', 'Skipped ArcGIS water/land cover: ' + err.message, 0.4);
+    }
   }
-  return ok ? { elements: elements } : null;
+
+  // Keep the optional roads overlay separate and lightweight. Water and land cover
+  // no longer depend on the public Overpass servers.
+  if (o.roads) {
+    try {
+      const roadQuery = G.buildOverpassQuery(bb, { water: false, land: false, roads: true, timeout: 20 });
+      if (roadQuery) {
+        elements = elements.concat(await osmRequest('major roads', roadQuery));
+        successes++;
+      }
+    } catch (err) {
+      progress('osm', 'Skipped major roads: ' + err.message, 0.48);
+    }
+  }
+
+  return successes ? { elements: elements } : null;
 }
+
 
 /* ---------------------------------------------------------------- Generate */
 
