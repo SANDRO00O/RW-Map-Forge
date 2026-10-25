@@ -340,7 +340,7 @@
 
   function generate() {
     if (generating) return;
-    const w = new Worker('/js/pipeline.worker.js?v=global-r2-20261025-6');
+    const w = new Worker('/js/pipeline.worker.js?v=global-r2-20261025-7');
     generating = w;
     $('btnGenerate').disabled = true;
     Progress.open(() => { w.terminate(); generating = null; $('btnGenerate').disabled = false; Progress.close(); });
@@ -470,7 +470,7 @@
       ids.forEach((id) => { sub[id] = catalog[id]; });
       const opts = { fmt: S.fmt, tsMode: S.tsMode, extPrefix: S.extPrefix, builders: S.builders, mapInfo: S.mapInfo, template: template ? { sets: template } : null };
       if (opts.tsMode === 'template' && !template) { opts.tsMode = 'external'; UI.toast('No template map selected; using external tilesets instead.', 'info'); }
-      if (!exporter) exporter = new Worker('/js/pipeline.worker.js?v=global-r2-20261025-6');
+      if (!exporter) exporter = new Worker('/js/pipeline.worker.js?v=global-r2-20261025-7');
       btn.disabled = true; btn.classList.add('spin');
       const done = () => { btn.disabled = false; btn.classList.remove('spin'); };
       exporter.onmessage = (e) => {
