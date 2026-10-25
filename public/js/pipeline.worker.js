@@ -93,30 +93,75 @@ async function errorFrom(res, fallback) {
 }
 
 async function loadElevation(geo) {
-  const z = G.demZoom(geo, 36), r = G.demRange(geo, z);
+  // The edge worker may need to try two upstream hostnames per tile. Keep the
+  // requested batch under the free-plan subrequest budget (20 tiles × 2 hosts).
+  const z = G.demZoom(geo, 20), r = G.demRange(geo, z);
   const nx = r.tx1 - r.tx0 + 1, ny = r.ty1 - r.ty0 + 1;
-  progress('elevation', 'Requesting ' + nx * ny + ' elevation tiles (zoom ' + z + ')', 0.03);
-  const res = await fetch('/api/dem?z=' + z + '&x0=' + r.tx0 + '&x1=' + r.tx1 + '&y0=' + r.ty0 + '&y1=' + r.ty1);
-  if (!res.ok) throw new Error(await errorFrom(res, 'Elevation request failed'));
-  const buf = await res.arrayBuffer();
-  const dv = new DataView(buf), tiles = new Map();
-  let pos = 0, n = 0, missing = 0;
-  for (let ty = r.ty0; ty <= r.ty1; ty++) {
-    for (let tx = r.tx0; tx <= r.tx1; tx++) {
-      const len = dv.getUint32(pos, true); pos += 4;
-      if (len) {
-        try { tiles.set(tx + ',' + ty, await decodeTile(new Uint8Array(buf, pos, len))); } catch (_) { missing++; }
-        pos += len;
-      } else missing++;
-      n++;
-      progress('elevation', 'Decoding elevation tiles ' + n + '/' + nx * ny, 0.03 + 0.17 * n / (nx * ny));
+  const expected = nx * ny;
+  const url = '/api/dem?z=' + z + '&x0=' + r.tx0 + '&x1=' + r.tx1 + '&y0=' + r.ty0 + '&y1=' + r.ty1;
+  let lastIssue = 'unknown elevation data error';
+
+  // Partial batches are not valid terrain: retry them, then fail clearly instead
+  // of silently spreading missing elevations into large flat-looking map areas.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    progress('elevation', (attempt === 1 ? 'Requesting ' : 'Retrying ') + expected +
+      ' elevation tiles (zoom ' + z + ', attempt ' + attempt + '/3)', 0.03);
+    let res;
+    try {
+      res = await fetch(url, { cache: 'no-store' });
+    } catch (err) {
+      lastIssue = err && err.message || String(err);
+      if (attempt < 3) { await new Promise((resolve) => setTimeout(resolve, 250 * attempt)); continue; }
+      break;
+    }
+    if (!res.ok) {
+      lastIssue = await errorFrom(res, 'Elevation request failed');
+      if (res.status >= 500 && attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+        continue;
+      }
+      throw new Error(lastIssue);
+    }
+
+    const present = Number(res.headers.get('x-tiles-present'));
+    const total = Number(res.headers.get('x-tiles-total'));
+    if (present !== expected || total !== expected) {
+      lastIssue = 'provider returned ' + (Number.isFinite(present) ? present : 0) + '/' +
+        (Number.isFinite(total) ? total : expected) + ' complete elevation tiles';
+      if (attempt < 3) { await new Promise((resolve) => setTimeout(resolve, 250 * attempt)); continue; }
+      break;
+    }
+
+    try {
+      const buf = await res.arrayBuffer();
+      const dv = new DataView(buf), tiles = new Map();
+      let pos = 0, missing = 0;
+      for (let ty = r.ty0; ty <= r.ty1; ty++) {
+        for (let tx = r.tx0; tx <= r.tx1; tx++) {
+          if (pos + 4 > dv.byteLength) throw new Error('Elevation batch ended before tile ' + tx + ',' + ty);
+          const len = dv.getUint32(pos, true); pos += 4;
+          if (!len || pos + len > dv.byteLength) throw new Error('Elevation tile ' + tx + ',' + ty + ' is missing or truncated');
+          const decoded = await decodeTile(new Uint8Array(buf, pos, len));
+          if (!(decoded instanceof Int16Array) || decoded.length !== 65536) {
+            throw new Error('Elevation tile ' + tx + ',' + ty + ' decoded to an invalid size');
+          }
+          tiles.set(tx + ',' + ty, decoded);
+          pos += len;
+          progress('elevation', 'Decoding elevation tiles ' + tiles.size + '/' + expected, 0.03 + 0.17 * tiles.size / expected);
+        }
+      }
+      if (pos !== dv.byteLength) throw new Error('Elevation batch has unexpected trailing bytes');
+      if (missing) throw new Error(missing + ' missing elevation tile(s)');
+      const elev = G.sampleDem(geo, z, (tx, ty) => tiles.get(tx + ',' + ty) || null);
+      if (elev.some((v) => !Number.isFinite(v))) throw new Error('Elevation sampling produced invalid values');
+      tiles.clear();
+      return elev;
+    } catch (err) {
+      lastIssue = err && err.message || String(err);
+      if (attempt < 3) { await new Promise((resolve) => setTimeout(resolve, 250 * attempt)); continue; }
     }
   }
-  if (!tiles.size) throw new Error('Could not read any elevation tile.');
-  if (missing) progress('elevation', missing + ' tile(s) missing; neighbouring values will fill the gaps', 0.2);
-  const elev = G.sampleDem(geo, z, (tx, ty) => tiles.get(tx + ',' + ty) || null);
-  tiles.clear();
-  return elev;
+  throw new Error('Elevation data remained incomplete after 3 attempts; no partial map was generated. ' + lastIssue + '. Please try generating again.');
 }
 
 async function osmRequest(label, query) {
