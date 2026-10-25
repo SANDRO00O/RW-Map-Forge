@@ -25,7 +25,7 @@ const OVERPASS = [
   'https://overpass.private.coffee/api/interpreter',
   'https://overpass-api.de/api/interpreter',
 ];
-const MAX_TILES = 40; // the free plan allows 50 subrequests per invocation
+const MAX_TILES = 20; // up to 2 upstream host attempts per tile; remain under the 50-subrequest free-plan limit
 const DAY = 86400;
 
 const json = (obj, status = 200, extra = {}) =>
@@ -198,7 +198,16 @@ async function fetchTile(z, x, y) {
         headers: { 'user-agent': UA },
         cf: { cacheTtl: 30 * DAY, cacheEverything: true },
       });
-      if (r.ok) return new Uint8Array(await r.arrayBuffer());
+      if (!r.ok) continue;
+      const bytes = new Uint8Array(await r.arrayBuffer());
+      // Some upstream failures can arrive as HTTP 200 bodies. Never cache or
+      // return them as if they were real elevation PNGs.
+      if (bytes.length < 33 ||
+          bytes[0] !== 0x89 || bytes[1] !== 0x50 || bytes[2] !== 0x4e || bytes[3] !== 0x47 ||
+          bytes[4] !== 0x0d || bytes[5] !== 0x0a || bytes[6] !== 0x1a || bytes[7] !== 0x0a) continue;
+      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      if (dv.getUint32(16, false) !== 256 || dv.getUint32(20, false) !== 256) continue;
+      return bytes;
     } catch (_) { /* try the next host */ }
   }
   return null;
@@ -215,7 +224,7 @@ async function handleDem(request, url, ctx) {
   const y0 = int(url, 'y0', 0, max), y1 = int(url, 'y1', 0, max);
   if (x1 < x0 || y1 < y0) throw new Error('Invalid tile range');
   const count = (x1 - x0 + 1) * (y1 - y0 + 1);
-  if (count > MAX_TILES) throw new Error(`Too many tiles (max ${MAX_TILES})`);
+  if (count > MAX_TILES) return json({ error: `Too many elevation tiles requested (max ${MAX_TILES}); use a lower detail level or smaller map.` }, 400);
 
   const cache = caches.default;
   const key = new Request(url.toString(), { method: 'GET' });
@@ -238,15 +247,17 @@ async function handleDem(request, url, ctx) {
     pos += 4;
     if (t) { out.set(t, pos); pos += t.length; }
   }
+  const complete = present === count;
   const res = new Response(out, {
     headers: {
       'content-type': 'application/octet-stream',
-      'cache-control': `public, max-age=${7 * DAY}`,
+      // Do not let browsers or intermediaries retain partial elevation batches.
+      'cache-control': complete ? `public, max-age=${7 * DAY}` : 'no-store',
       'x-tiles-present': String(present),
       'x-tiles-total': String(count),
     },
   });
-  if (present === count) ctx.waitUntil(cache.put(key, res.clone()));
+  if (complete) ctx.waitUntil(cache.put(key, res.clone()));
   return res;
 }
 
