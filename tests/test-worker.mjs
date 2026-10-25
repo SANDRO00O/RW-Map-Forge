@@ -42,6 +42,8 @@ async function callFeatures(source, ctx) {
     assert.ok(options.headers.accept.includes('application/geo+json'));
     assert.equal(url.searchParams.get('outSR'), '4326');
     assert.equal(url.searchParams.get('f'), 'json');
+    assert.equal(url.searchParams.get('maxAllowableOffset'), '0.0005');
+    assert.equal(url.searchParams.get('geometryPrecision'), '5');
     assert.equal(url.searchParams.get('geometryType'), 'esriGeometryEnvelope');
     assert.equal(url.searchParams.get('geometry'), '47.5,30.4,47.6,30.5');
     assert.equal(url.searchParams.get('where'), '1=1');
