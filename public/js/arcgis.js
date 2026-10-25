@@ -87,10 +87,12 @@
     const type = String((properties || {}).type || (properties || {}).TYPE || (properties || {}).featurecla || '').toLowerCase();
     if (type.includes('ferry')) return null;
     if (type.includes('motorway') || type.includes('freeway') || type.includes('interstate')) return { highway: 'motorway' };
-    if (type.includes('major') || type.includes('trunk') || type.includes('primary') || type.includes('highway')) return { highway: 'primary' };
     if (type.includes('secondary')) return { highway: 'secondary' };
-    if (type.includes('road') || type.includes('street') || type.includes('route')) return { highway: 'tertiary' };
-    return { highway: 'primary' };
+    if (type.includes('minor') || type.includes('local') || type.includes('road') ||
+        type.includes('street') || type.includes('route') || type.includes('bypass') ||
+        type.includes('connector')) return { highway: 'tertiary' };
+    if (type.includes('major') || type.includes('trunk') || type.includes('primary') || type.includes('highway')) return { highway: 'primary' };
+    return { highway: 'tertiary' };
   }
 
   function featureToElements(feature, kind, bbox, firstId) {
