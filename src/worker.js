@@ -40,6 +40,9 @@ export async function handleApiRequest(request, ctx, workerEnv) {
 
   try {
     if (url.pathname === '/api/health') return json({ ok: true, terrainCache: !!((workerEnv || (ctx && ctx.env) || {}).TERRAIN_CACHE) });
+    if (url.pathname === '/api/terrain-status' && request.method === 'GET') return await handleGlobalTerrainStatus(ctx, workerEnv || (ctx && ctx.env) || {});
+    if (url.pathname === '/api/hydro-tile' && request.method === 'GET') return await handleGlobalTerrainTile(url, ctx, workerEnv || (ctx && ctx.env) || {}, 'hydro');
+    if (url.pathname === '/api/landcover-tile' && request.method === 'GET') return await handleGlobalTerrainTile(url, ctx, workerEnv || (ctx && ctx.env) || {}, 'landcover');
     if (url.pathname === '/api/dem' && request.method === 'GET') return await handleDem(request, url, ctx);
     if (url.pathname === '/api/terrain-features' && request.method === 'POST') return await handleTerrainFeatures(request, ctx, workerEnv || (ctx && ctx.env) || {});
     if (url.pathname === '/api/osm' && request.method === 'POST') return await handleOsm(request, ctx);
@@ -58,6 +61,127 @@ export default {
     return new Response('Not found', { status: 404 });
   },
 };
+
+/* ---------------------------------- preloaded global terrain tiles */
+
+const GLOBAL_TERRAIN_PREFIX = 'global/v1';
+const GLOBAL_MANIFEST_KEY = GLOBAL_TERRAIN_PREFIX + '/manifest.json';
+
+async function globalTerrainManifest(env, ctx) {
+  const r2 = env && env.TERRAIN_CACHE;
+  if (!r2) return { ready: false, error: 'R2 TERRAIN_CACHE binding is not configured' };
+
+  const cacheKey = new Request('https://global-terrain-cache.invalid/manifest.json', { method: 'GET' });
+  const hit = await caches.default.match(cacheKey);
+  if (hit) {
+    try { return await hit.json(); } catch (_) { /* reread the bucket */ }
+  }
+
+  let object;
+  try { object = await r2.get(GLOBAL_MANIFEST_KEY); }
+  catch (err) { return { ready: false, error: 'Could not read global terrain manifest: ' + String(err.message || err) }; }
+  if (!object) return { ready: false, error: 'Global terrain datasets have not been imported into R2 yet' };
+
+  let manifest;
+  try { manifest = JSON.parse(await new Response(object.body).text()); }
+  catch (_) { return { ready: false, error: 'Global terrain manifest is invalid JSON' }; }
+
+  if (manifest.ready === true) {
+    const response = json(manifest, 200, { 'cache-control': 'public, max-age=60' });
+    ctx.waitUntil(caches.default.put(cacheKey, response.clone()).catch(() => {}));
+  }
+  return manifest;
+}
+
+async function handleGlobalTerrainStatus(ctx, env) {
+  const manifest = await globalTerrainManifest(env, ctx);
+  return json({
+    ok: manifest.ready === true,
+    ready: manifest.ready === true,
+    datasetVersion: manifest.datasetVersion || null,
+    generatedAt: manifest.generatedAt || null,
+    statusMessage: manifest.statusMessage || manifest.error || null,
+    sources: manifest.sources || null,
+    tileCounts: {
+      rivers: manifest.rivers && manifest.rivers.nonEmptyCells,
+      water: manifest.water && manifest.water.nonEmptyCells,
+      roads: manifest.roads && manifest.roads.nonEmptyCells,
+      landcover: manifest.landcover && manifest.landcover.tiles,
+    },
+  }, manifest.ready === true ? 200 : 503);
+}
+
+function boundedIndex(value, max, name) {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0 || n > max) throw new Error('Invalid tile coordinate: ' + name);
+  return n;
+}
+
+async function handleGlobalTerrainTile(url, ctx, env, kind) {
+  const manifest = await globalTerrainManifest(env, ctx);
+  if (manifest.ready !== true) return json({
+    error: manifest.error || manifest.statusMessage || 'Global terrain data has not been imported yet',
+    ready: false,
+  }, 503);
+
+  const r2 = env && env.TERRAIN_CACHE;
+  let key, maxX, maxY, source;
+  try {
+    if (kind === 'hydro') {
+      source = url.searchParams.get('source');
+      if (!['water', 'rivers', 'roads'].includes(source)) return json({ error: 'Invalid hydro tile source' }, 400);
+      const degrees = source === 'roads' ? 10 : 2;
+      maxX = 360 / degrees - 1;
+      maxY = 180 / degrees - 1;
+      const x = boundedIndex(url.searchParams.get('x'), maxX, 'x');
+      const y = boundedIndex(url.searchParams.get('y'), maxY, 'y');
+      key = GLOBAL_TERRAIN_PREFIX + '/hydro/' + source + '/' + y + '_' + x + '.geojson.gz';
+    } else {
+      maxX = 35;
+      maxY = 17;
+      const x = boundedIndex(url.searchParams.get('x'), maxX, 'x');
+      const y = boundedIndex(url.searchParams.get('y'), maxY, 'y');
+      key = GLOBAL_TERRAIN_PREFIX + '/landcover/' + y + '_' + x + '.bin.gz';
+    }
+  } catch (err) {
+    return json({ error: err.message || String(err) }, 400);
+  }
+
+  const cacheKey = new Request('https://global-terrain-cache.invalid/' + key, { method: 'GET' });
+  const cached = await caches.default.match(cacheKey);
+  if (cached) return cached;
+
+  let object;
+  try { object = await r2.get(key); }
+  catch (err) { return json({ error: 'Unable to read local terrain tile: ' + String(err.message || err) }, 502); }
+
+  if (!object) {
+    // Missing vector tiles are legitimate empty areas. The ready manifest is only
+    // published after the importer finishes all source datasets.
+    if (kind === 'hydro') {
+      const empty = json({ type: 'FeatureCollection', features: [] }, 200, {
+        'cache-control': 'public, max-age=31536000, immutable',
+        'x-global-tile-empty': '1',
+        'x-global-dataset': source,
+      });
+      ctx.waitUntil(caches.default.put(cacheKey, empty.clone()).catch(() => {}));
+      return empty;
+    }
+    return json({ error: 'Expected land-cover tile is missing from the completed global dataset' }, 503);
+  }
+
+  const response = new Response(object.body, {
+    status: 200,
+    headers: {
+      'content-type': 'application/gzip',
+      'cache-control': 'public, max-age=31536000, immutable',
+      'x-global-dataset': kind === 'hydro' ? source : 'landcover',
+      'x-global-tile-format': kind === 'hydro' ? 'geojson-gzip' : 'uint8-gzip',
+    },
+  });
+  ctx.waitUntil(caches.default.put(cacheKey, response.clone()).catch(() => {}));
+  return response;
+}
 
 /* ------------------------------------------------------------------ DEM */
 
