@@ -164,7 +164,7 @@ function hedgedOverpass(query) {
           });
           const body = await r.text();
           if (!r.ok) {
-            const detail = body.replace(/\\s+/g, ' ').slice(0, 180);
+            const detail = body.replace(/\s+/g, ' ').slice(0, 180);
             throw new Error(`Overpass mirror ${i} replied HTTP ${r.status}${detail ? ': ' + detail : ''}`);
           }
 
