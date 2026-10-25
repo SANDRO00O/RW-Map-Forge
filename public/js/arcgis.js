@@ -83,6 +83,16 @@
     return output;
   }
 
+  function roadTags(properties) {
+    const type = String((properties || {}).type || (properties || {}).TYPE || (properties || {}).featurecla || '').toLowerCase();
+    if (type.includes('ferry')) return null;
+    if (type.includes('motorway') || type.includes('freeway') || type.includes('interstate')) return { highway: 'motorway' };
+    if (type.includes('major') || type.includes('trunk') || type.includes('primary') || type.includes('highway')) return { highway: 'primary' };
+    if (type.includes('secondary')) return { highway: 'secondary' };
+    if (type.includes('road') || type.includes('street') || type.includes('route')) return { highway: 'tertiary' };
+    return { highway: 'primary' };
+  }
+
   function featureToElements(feature, kind, bbox, firstId) {
     const rawGeometry = feature && feature.geometry;
     if (!rawGeometry || !bbox) return [];
@@ -104,6 +114,7 @@
     if (kind === 'water') tags = { natural: 'water' };
     else if (kind === 'rivers') tags = { waterway: 'river' };
     else if (kind === 'land') tags = landTags(properties);
+    else if (kind === 'roads') tags = roadTags(properties);
     else return [];
     if (!tags) return [];
 
@@ -137,5 +148,5 @@
     return out;
   }
 
-  return { landTags: landTags, clipRingToBounds: clipRingToBounds, clipLineToBounds: clipLineToBounds, featureToElements: featureToElements };
+  return { landTags: landTags, roadTags: roadTags, clipRingToBounds: clipRingToBounds, clipLineToBounds: clipLineToBounds, featureToElements: featureToElements };
 });
