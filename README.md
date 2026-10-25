@@ -21,12 +21,17 @@ tests/             unit test, local dev server with mock data, browser end-to-en
 | Endpoint | What it does |
 | --- | --- |
 | `GET /api/dem?z&x0&x1&y0&y1` | Fetches up to 40 elevation tiles **in parallel at the edge** and returns them in one response, cached by Cloudflare. A map needs one request instead of dozens. |
-| `POST /api/terrain-features` | Queries public ArcGIS REST services for water bodies, linear rivers, and global land-cover classes, clips geometry to the selected bounds, and caches results at the edge. |
+| `POST /api/terrain-features` | Reads/writes persistent terrain-feature responses in the `TERRAIN_CACHE` R2 bucket first, then fills missing areas from public ArcGIS FeatureServer endpoints. Results are clipped in the browser worker. |
 | `POST /api/osm` | Optional Overpass proxy for the roads overlay only. Water and land-cover generation no longer depends on public Overpass instances. |
 | `GET /api/geocode?q` | Place search through Nominatim with a proper User-Agent and edge caching. |
 
 The Worker does no heavy computation (the free plan allows about 10 ms of CPU per request). All terrain processing runs in a
 Web Worker inside the visitor's browser, which also keeps the page responsive.
+
+
+## Terrain data cache
+
+Successful water, river, and broad land-cover feature responses are stored in the Cloudflare R2 bucket `rw-map-forge-terrain`, keyed by source and a rounded geographic bounding box. Repeated requests for the same area are served from R2 even when the upstream provider is unavailable. This is an on-demand persistent cache, not a full preloaded replica of every global dataset: the first request for a never-cached area still needs the upstream service. The bucket is bound to the Pages Function as `TERRAIN_CACHE` in production and preview.
 
 ## Deploy to Cloudflare (free plan)
 
