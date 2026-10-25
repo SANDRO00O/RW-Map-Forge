@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
+import { gzipSync, gunzipSync } from 'node:zlib';
 
 if (!globalThis.crypto) Object.defineProperty(globalThis, 'crypto', { value: webcrypto });
 
@@ -23,12 +24,13 @@ const r2 = {
     return { body: new Response(r2Stored.get(key)).body };
   },
   async put(key, value, options = {}) {
-    let text;
-    if (typeof value === 'string') text = value;
-    else if (value instanceof ReadableStream) text = await new Response(value).text();
-    else text = String(value);
-    r2Stored.set(key, text);
-    return { key, size: text.length, options };
+    let stored;
+    if (typeof value === 'string') stored = value;
+    else if (value instanceof ReadableStream) stored = Buffer.from(await new Response(value).arrayBuffer());
+    else if (value instanceof Uint8Array || Buffer.isBuffer(value)) stored = Buffer.from(value);
+    else stored = String(value);
+    r2Stored.set(key, stored);
+    return { key, size: typeof stored === 'string' ? Buffer.byteLength(stored) : stored.length, options };
   },
 };
 
@@ -125,6 +127,61 @@ const fakeFeatureCollection = {
   assert.equal(res.status, 502);
   const data = await res.json();
   assert.match(data.error, /did not return a valid feature collection/);
+}
+
+{
+  // A completed R2 import is advertised through the manifest; the tile route then
+  // serves gzip-compressed vector/raster tiles without calling any public map API.
+  edgeStored.clear();
+  r2Stored.clear();
+  const manifest = {
+    ready: true,
+    datasetVersion: 'global-v1',
+    generatedAt: '2026-01-01T00:00:00Z',
+    statusMessage: 'ready',
+    rivers: { nonEmptyCells: 123 },
+    water: { nonEmptyCells: 456 },
+    roads: { nonEmptyCells: 78 },
+    landcover: { tiles: 648 },
+  };
+  r2Stored.set('global/v1/manifest.json', JSON.stringify(manifest));
+  const collection = {
+    type: 'FeatureCollection',
+    features: [{
+      type: 'Feature',
+      properties: { HYRIV_ID: 42, ORD_STRA: 3 },
+      geometry: { type: 'LineString', coordinates: [[47.5, 30.4], [47.6, 30.5]] },
+    }],
+  };
+  r2Stored.set('global/v1/hydro/rivers/45_90.geojson.gz', gzipSync(Buffer.from(JSON.stringify(collection))));
+  const landValues = Buffer.alloc(400 * 400, 5);
+  r2Stored.set('global/v1/landcover/3_2.bin.gz', gzipSync(landValues));
+
+  const ctx = ctxWithWaitUntil();
+  const statusRes = await handleApiRequest(new Request('https://rw-map-forge.pages.dev/api/terrain-status'), ctx, { TERRAIN_CACHE: r2 });
+  assert.equal(statusRes.status, 200);
+  const status = await statusRes.json();
+  assert.equal(status.ready, true);
+  assert.equal(status.tileCounts.rivers, 123);
+  await Promise.all(ctx.pending);
+
+  const hydroRes = await handleApiRequest(new Request('https://rw-map-forge.pages.dev/api/hydro-tile?source=rivers&x=90&y=45'), ctxWithWaitUntil(), { TERRAIN_CACHE: r2 });
+  assert.equal(hydroRes.status, 200);
+  assert.equal(hydroRes.headers.get('content-type'), 'application/gzip');
+  const decodedHydro = JSON.parse(gunzipSync(Buffer.from(await hydroRes.arrayBuffer())).toString('utf8'));
+  assert.equal(decodedHydro.features[0].properties.HYRIV_ID, 42);
+
+  const emptyRes = await handleApiRequest(new Request('https://rw-map-forge.pages.dev/api/hydro-tile?source=water&x=91&y=45'), ctxWithWaitUntil(), { TERRAIN_CACHE: r2 });
+  assert.equal(emptyRes.status, 200);
+  assert.equal(emptyRes.headers.get('x-global-tile-empty'), '1');
+  assert.equal((await emptyRes.json()).features.length, 0);
+
+  const landRes = await handleApiRequest(new Request('https://rw-map-forge.pages.dev/api/landcover-tile?x=2&y=3'), ctxWithWaitUntil(), { TERRAIN_CACHE: r2 });
+  assert.equal(landRes.status, 200);
+  assert.equal(landRes.headers.get('x-global-tile-format'), 'uint8-gzip');
+  const decodedLand = gunzipSync(Buffer.from(await landRes.arrayBuffer()));
+  assert.equal(decodedLand.length, 400 * 400);
+  assert.equal(decodedLand[0], 5);
 }
 
 console.log('Worker R2 terrain cache tests passed.');
