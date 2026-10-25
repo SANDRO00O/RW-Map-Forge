@@ -31,6 +31,9 @@ ROAD_DEG = 10
 LAND_DEG = 10
 LAND_RES = 0.025
 LAND_SIDE = int(LAND_DEG / LAND_RES)  # 400 pixels per side
+MAX_UPLOAD_BYTES = int(float(os.environ.get('MAX_UPLOAD_GB', '9')) * (1024 ** 3))
+_uploaded_bytes = 0
+_upload_lock = __import__('threading').Lock()
 
 HYDRORIVERS_URL = "https://data.hydrosheds.org/file/HydroRIVERS/HydroRIVERS_v10_shp.zip"
 HYDROLAKES_URL = "https://data.hydrosheds.org/file/hydrolakes/HydroLAKES_polys_v10_shp.zip"
@@ -104,13 +107,21 @@ def r2_client():
     )
 
 def put_bytes(client, key: str, body: bytes, content_type: str) -> None:
-    client.put_object(
-        Bucket=BUCKET,
-        Key=key,
-        Body=body,
-        ContentType=content_type,
-        CacheControl="public, max-age=31536000, immutable",
-    )
+    global _uploaded_bytes
+    with _upload_lock:
+        if _uploaded_bytes + len(body) > MAX_UPLOAD_BYTES:
+            raise RuntimeError(
+                f"Import would exceed MAX_UPLOAD_GB={MAX_UPLOAD_BYTES / (1024 ** 3):.1f}; "
+                "raise the GitHub Actions variable only after reviewing R2 pricing."
+            )
+        client.put_object(
+            Bucket=BUCKET,
+            Key=key,
+            Body=body,
+            ContentType=content_type,
+            CacheControl="public, max-age=31536000, immutable",
+        )
+        _uploaded_bytes += len(body)
 
 def mark_manifest(client, ready: bool, **extra) -> None:
     manifest = {
@@ -363,7 +374,7 @@ def main() -> None:
             "generatedAt": datetime.now(timezone.utc).isoformat(),
             "statusMessage": "All global terrain datasets were processed and uploaded.",
         })
-        mark_manifest(client, True, **metrics)
+        mark_manifest(client, True, **{k: v for k, v in metrics.items() if k != 'ready'}, uploadedBytes=_uploaded_bytes)
         log("Import completed successfully. global/v1/manifest.json now marks the local datasets ready.")
         log(json.dumps(metrics, indent=2))
     except Exception as exc:
