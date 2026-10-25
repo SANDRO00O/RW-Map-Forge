@@ -31,20 +31,27 @@ const json = (obj, status = 200, extra = {}) =>
     headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...extra },
   });
 
+export async function handleApiRequest(request, ctx) {
+  const url = new URL(request.url);
+  if (!url.pathname.startsWith('/api/')) return null;
+
+  try {
+    if (url.pathname === '/api/health') return json({ ok: true });
+    if (url.pathname === '/api/dem' && request.method === 'GET') return await handleDem(request, url, ctx);
+    if (url.pathname === '/api/osm' && request.method === 'POST') return await handleOsm(request, ctx);
+    if (url.pathname === '/api/geocode' && request.method === 'GET') return await handleGeocode(url, ctx);
+    return json({ error: 'Not found' }, 404);
+  } catch (err) {
+    return json({ error: String((err && err.message) || err) }, 500);
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-    try {
-      if (url.pathname === '/api/health') return json({ ok: true });
-      if (url.pathname === '/api/dem' && request.method === 'GET') return await handleDem(request, url, ctx);
-      if (url.pathname === '/api/osm' && request.method === 'POST') return await handleOsm(request, ctx);
-      if (url.pathname === '/api/geocode' && request.method === 'GET') return await handleGeocode(url, ctx);
-      if (url.pathname.startsWith('/api/')) return json({ error: 'Not found' }, 404);
-      if (env && env.ASSETS) return env.ASSETS.fetch(request);
-      return new Response('Not found', { status: 404 });
-    } catch (err) {
-      return json({ error: String((err && err.message) || err) }, 500);
-    }
+    const apiResponse = await handleApiRequest(request, ctx);
+    if (apiResponse) return apiResponse;
+    if (env && env.ASSETS) return env.ASSETS.fetch(request);
+    return new Response('Not found', { status: 404 });
   },
 };
 
