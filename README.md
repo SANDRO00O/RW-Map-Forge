@@ -31,7 +31,7 @@ Web Worker inside the visitor's browser, which also keeps the page responsive.
 
 ## Terrain data cache
 
-Successful water, river, and broad land-cover feature responses are stored in the Cloudflare R2 bucket `rw-map-forge-terrain`, keyed by source and a rounded geographic bounding box. Repeated requests for the same area are served from R2 even when the upstream provider is unavailable. This is an on-demand persistent cache, not a full preloaded replica of every global dataset: the first request for a never-cached area still needs the upstream service. The bucket is bound to the Pages Function as `TERRAIN_CACHE` in production and preview.
+Successful water, river, and broad land-cover feature responses are stored in the Cloudflare R2 bucket `rw-map-forge-terrain`, keyed by source and fixed geographic cells (normally 0.25° × 0.25°). Nearby maps reuse the same stored cells, so repeats are served from R2 even when the upstream provider is unavailable. This is an on-demand persistent cache, not a full preloaded replica of every global dataset: the first request for a never-cached cell still needs the upstream service. The bucket is bound to the Pages Function as `TERRAIN_CACHE` in production and preview.
 
 ## Deploy to Cloudflare (free plan)
 
