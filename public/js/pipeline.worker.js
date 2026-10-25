@@ -191,8 +191,8 @@ async function generate(p) {
   if (p.osm.water || p.osm.land || p.osm.roads) {
     const json = await loadOsm(geo, p.osm);
     if (json) { progress('osm', 'Rasterizing ' + json.elements.length + ' map features', 0.55); ras = G.rasterizeOsm(json, geo, W, H, p.osm); }
-    else progress('osm', 'No OpenStreetMap data; using elevation only', 0.55);
-  } else progress('osm', 'OpenStreetMap disabled', 0.55);
+    else progress('osm', 'No external map-feature data; using elevation only', 0.55);
+  } else progress('osm', 'External map-feature data disabled', 0.55);
 
   progress('terrain', 'Classifying terrain', 0.65);
   const r = G.classify({ W: W, H: H, mpt: mpt, lat: p.lat, elev: elev, water: ras.water, land: ras.land, road: ras.road }, p.terrain);
