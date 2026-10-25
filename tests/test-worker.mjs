@@ -225,4 +225,32 @@ const fakeFeatureCollection = {
   assert.equal(requests, 0);
 }
 
+
+{
+  // Public tile APIs are limited per Cloudflare client IP without writing
+  // counters to R2/KV. The 121st request in one window gets a retryable 429.
+  edgeStored.clear();
+  r2Stored.set('global/v1/manifest.json', JSON.stringify({
+    ready: true, datasetVersion: 'global-v1', statusMessage: 'ready',
+    rivers: { nonEmptyCells: 1 }, water: { nonEmptyCells: 1 },
+    roads: { nonEmptyCells: 1 }, landcover: { tiles: 648 },
+  }));
+  const clientIp = '198.51.100.18';
+  const ctx = ctxWithWaitUntil();
+  const request = () => new Request(
+    'https://rw-map-forge.pages.dev/api/hydro-tile?source=water&x=46&y=22',
+    { headers: { 'cf-connecting-ip': clientIp } },
+  );
+  for (let i = 0; i < 120; i++) {
+    const res = await handleApiRequest(request(), ctx, { TERRAIN_CACHE: r2 });
+    assert.equal(res.status, 200, 'first 120 terrain tile requests should be allowed');
+    if (ctx.pending.length) await Promise.all(ctx.pending.splice(0));
+  }
+  const blocked = await handleApiRequest(request(), ctx, { TERRAIN_CACHE: r2 });
+  assert.equal(blocked.status, 429);
+  assert.equal(blocked.headers.get('cache-control'), 'no-store');
+  assert.ok(Number(blocked.headers.get('retry-after')) > 0);
+  assert.equal((await blocked.json()).error.includes('Too many requests'), true);
+}
+
 console.log('Worker R2 terrain cache tests passed.');
