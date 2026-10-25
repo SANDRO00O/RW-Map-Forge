@@ -184,4 +184,45 @@ const fakeFeatureCollection = {
   assert.equal(decodedLand[0], 5);
 }
 
+
+{
+  // Incomplete DEM batches must not be cached as if they were complete.
+  edgeStored.clear();
+  let requests = 0;
+  globalThis.fetch = async (input) => {
+    requests++;
+    const url = new URL(String(input));
+    if (url.pathname.endsWith('/1/1/0.png')) {
+      return new Response('missing', { status: 404 });
+    }
+    const png = new Uint8Array(33);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    png.set([0x49, 0x48, 0x44, 0x52], 12); // IHDR
+    new DataView(png.buffer).setUint32(16, 256, false);
+    new DataView(png.buffer).setUint32(20, 256, false);
+    return new Response(png, { status: 200, headers: { 'content-type': 'image/png' } });
+  };
+  const url = 'https://rw-map-forge.pages.dev/api/dem?z=1&x0=0&x1=1&y0=0&y1=0';
+  const res = await handleApiRequest(new Request(url), ctxWithWaitUntil());
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('x-tiles-present'), '1');
+  assert.equal(res.headers.get('x-tiles-total'), '2');
+  assert.equal(res.headers.get('cache-control'), 'no-store');
+  assert.equal(edgeStored.has(url), false, 'partial DEM batches must not enter the edge cache');
+  assert.ok(requests >= 3, 'missing primary-host tile should try the second configured host');
+}
+
+{
+  // Reject oversized batches before starting upstream fetches to avoid exceeding
+  // the edge subrequest budget and causing random missing elevation cells.
+  let requests = 0;
+  globalThis.fetch = async () => { requests++; throw new Error('must not fetch oversized batch'); };
+  const res = await handleApiRequest(new Request(
+    'https://rw-map-forge.pages.dev/api/dem?z=3&x0=0&x1=4&y0=0&y1=4'
+  ), ctxWithWaitUntil());
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /max 20/);
+  assert.equal(requests, 0);
+}
+
 console.log('Worker R2 terrain cache tests passed.');
