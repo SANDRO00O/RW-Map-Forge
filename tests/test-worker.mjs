@@ -31,11 +31,9 @@ async function callFeatures(source, ctx) {
   stored.clear();
   const pending = [];
   const fakeFeatureCollection = {
-    type: 'FeatureCollection',
     features: [{
-      type: 'Feature',
-      properties: { name: 'Test lake' },
-      geometry: { type: 'Polygon', coordinates: [[[47.51, 30.41], [47.59, 30.41], [47.59, 30.49], [47.51, 30.49], [47.51, 30.41]]] },
+      attributes: { name: 'Test lake' },
+      geometry: { rings: [[[47.51, 30.41], [47.59, 30.41], [47.59, 30.49], [47.51, 30.49], [47.51, 30.41]]] },
     }],
   };
   globalThis.fetch = async (input, options) => {
@@ -43,7 +41,7 @@ async function callFeatures(source, ctx) {
     assert.equal(url.hostname, 'services2.arcgis.com');
     assert.ok(options.headers.accept.includes('application/geo+json'));
     assert.equal(url.searchParams.get('outSR'), '4326');
-    assert.equal(url.searchParams.get('f'), 'geojson');
+    assert.equal(url.searchParams.get('f'), 'json');
     assert.equal(url.searchParams.get('geometryType'), 'esriGeometryEnvelope');
     assert.equal(url.searchParams.get('geometry'), '47.5,30.4,47.6,30.5');
     assert.equal(url.searchParams.get('where'), '1=1');
@@ -58,9 +56,9 @@ async function callFeatures(source, ctx) {
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('x-terrain-source'), 'ArcGIS');
   const data = await res.json();
-  assert.equal(data.type, 'FeatureCollection');
+  assert.ok(Array.isArray(data.features));
   assert.equal(data.features.length, 1);
-  assert.equal(data.features[0].properties.name, 'Test lake');
+  assert.equal(data.features[0].attributes.name, 'Test lake');
   await Promise.all(pending);
   assert.equal(stored.size, 1);
 }
@@ -81,7 +79,7 @@ async function callFeatures(source, ctx) {
     headers: { 'content-type': 'application/json' },
   });
   const res = await callFeatures('rivers', { waitUntil() {} });
-  // The proxy should reject ArcGIS error JSON rather than cache it as valid GeoJSON.
+  // Pass-through preserves provider diagnostics; fetchArcgisSource turns this into a visible error.
   assert.equal(res.status, 200);
   const data = await res.json();
   assert.equal(data.error.message, 'Unsupported query format');
