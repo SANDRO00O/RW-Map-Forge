@@ -177,7 +177,7 @@ function terrainCacheResponse(body, source, cacheStatus) {
     headers: {
       'content-type': 'application/json; charset=utf-8',
       'cache-control': 'public, max-age=' + DAY,
-      'x-terrain-source': source === 'rivers' ? 'Hydrography service' : 'ArcGIS',
+      'x-terrain-source': source,
       'x-terrain-cache': cacheStatus,
     },
   });
