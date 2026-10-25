@@ -145,7 +145,7 @@ function arcgisQueryUrl(endpoint, bbox, source) {
     outSR: '4326',
     returnGeometry: 'true',
     resultRecordCount: source === 'water' ? '1800' : (source === 'land' ? '900' : '1000'),
-    f: 'geojson',
+    f: 'json',
   };
   Object.keys(p).forEach((k) => u.searchParams.set(k, p[k]));
   return u.toString();
@@ -176,12 +176,12 @@ async function handleTerrainFeatures(request, ctx) {
       signal: ctl.signal,
     });
     if (!upstream.ok) return json({ error: 'ArcGIS ' + source + ' request failed with HTTP ' + upstream.status }, 502);
-    // Pass through the GeoJSON without parsing it on the edge. Geometry conversion and
+    // Pass through ArcGIS JSON without parsing it on the edge. Geometry conversion and
     // clipping run in the browser's Web Worker, avoiding Cloudflare's CPU-time limit.
     const result = new Response(upstream.body, {
       status: 200,
       headers: {
-        'content-type': upstream.headers.get('content-type') || 'application/geo+json; charset=utf-8',
+        'content-type': upstream.headers.get('content-type') || 'application/json; charset=utf-8',
         'cache-control': 'public, max-age=' + DAY,
         'x-terrain-source': 'ArcGIS',
       },
