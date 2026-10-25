@@ -129,8 +129,8 @@ async function osmRequest(label, query) {
 
 async function loadOsm(geo, o) {
   const bb = geo.bbox(), parts = [];
-  if (o.water) parts.push(['water', G.buildOverpassQuery(bb, { water: true, timeout: 50 })]);
-  if (o.land || o.roads) parts.push(['land cover', G.buildOverpassQuery(bb, { land: o.land, roads: o.roads, timeout: 50 })]);
+  if (o.water) parts.push(['water', G.buildOverpassQuery(bb, { water: true, timeout: 25 })]);
+  if (o.land || o.roads) parts.push(['land cover', G.buildOverpassQuery(bb, { land: o.land, roads: o.roads, timeout: 25 })]);
   let elements = [], ok = 0;
   for (const p of parts) {
     try { elements = elements.concat(await osmRequest(p[0], p[1])); ok++; }
