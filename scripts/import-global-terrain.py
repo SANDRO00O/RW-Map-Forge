@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Build compact, self-hosted global terrain tiles and upload them to Cloudflare R2.
 
-The import is intentionally resumable at the dataset level. It only publishes
-manifest.ready=true after every dataset has been processed and uploaded.
+The importer reuses successfully uploaded tiles when rerun after a failure. It
+only publishes manifest.ready=true after every dataset has been processed.
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from rasterio.windows import Window
 
 BUCKET = "rw-map-forge-terrain"
 PREFIX = "global/v1"
-HYDRO_DEG = 2
+HYDRO_DEG = 4
 ROAD_DEG = 10
 LAND_DEG = 10
 LAND_RES = 0.025
@@ -40,7 +40,7 @@ HYDROLAKES_URL = "https://data.hydrosheds.org/file/hydrolakes/HydroLAKES_polys_v
 NATURAL_EARTH_ROADS_URL = "https://naciscdn.org/naturalearth/10m/cultural/ne_10m_roads.zip"
 MODIS_LANDCOVER_URL = (
     "https://zenodo.org/records/8367523/files/"
-    "lc_mcd12q1v061.p1_c_500m_s_20210101_20211231_go_epsg.4326_v20230818.tif?download=1"
+    "lc_mcd12q1v061.t1_c_500m_s_20210101_20211231_go_epsg.4326_v20230818.tif?download=1"
 )
 
 def log(message: str) -> None:
