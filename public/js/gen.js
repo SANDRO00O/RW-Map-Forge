@@ -243,7 +243,7 @@
     const water = new Uint8Array(N), sea = new Uint8Array(N), land = new Uint8Array(N);
     for (let i = 0; i < N; i++) {
       const lowSea = e[i] <= p.seaLevel;
-      const w = lowSea || (osmWater && osmWater[i]);
+      const w = lowSea || (osmWater && osmWater[i]) || (osmLand && osmLand[i] === 7);
       water[i] = w ? 1 : 0; sea[i] = lowSea ? 1 : 0; land[i] = w ? 0 : 1;
     }
     const cls = new Uint8Array(N);
