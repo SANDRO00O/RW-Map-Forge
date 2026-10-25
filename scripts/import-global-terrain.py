@@ -195,7 +195,12 @@ def ogr_tile(
     selected_fields: str | None,
     simplify: str,
     temp_dir: Path,
+    existing_sizes: dict[str, int],
 ) -> tuple[bool, int]:
+    key = f"{PREFIX}/hydro/{source}/{y}_{x}.geojson.gz"
+    if key in existing_sizes:
+        return True, existing_sizes[key]
+
     west = -180 + x * degrees
     south = -90 + y * degrees
     east = west + degrees
@@ -243,13 +248,13 @@ def ogr_tile(
         }
         payload = json.dumps(compact, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         compressed = gzip.compress(payload, compresslevel=9, mtime=0)
-        key = f"{PREFIX}/hydro/{source}/{y}_{x}.geojson.gz"
         put_bytes(client, key, compressed, "application/gzip")
+        existing_sizes[key] = len(compressed)
         return True, len(compressed)
     finally:
         tmp_json.unlink(missing_ok=True)
 
-def build_vector_grid(client, shp: Path, source: str, degrees: int, where: str | None, fields: str | None, simplify: str, temp_dir: Path) -> dict:
+def build_vector_grid(client, shp: Path, source: str, degrees: int, where: str | None, fields: str | None, simplify: str, temp_dir: Path, existing_sizes: dict[str, int]) -> dict:
     create_spatial_index(shp)
     nx, ny = 360 // degrees, 180 // degrees
     log(f"Building {source}: {nx * ny:,} possible {degrees}° × {degrees}° cells")
@@ -263,7 +268,7 @@ def build_vector_grid(client, shp: Path, source: str, degrees: int, where: str |
             for x in range(nx):
                 work.append(pool.submit(
                     ogr_tile, client, shp, source, x, y, degrees,
-                    where, fields, simplify, temp_dir
+                    where, fields, simplify, temp_dir, existing_sizes
                 ))
         for future in concurrent.futures.as_completed(work):
             has_features, byte_count = future.result()
@@ -275,7 +280,7 @@ def build_vector_grid(client, shp: Path, source: str, degrees: int, where: str |
                 log(f"{source}: {done:,}/{len(work):,} cells checked; {stored:,} stored; {total_bytes / (1024**2):.1f} MiB compressed")
     return {"gridDegrees": degrees, "possibleCells": nx * ny, "nonEmptyCells": stored, "compressedBytes": total_bytes}
 
-def build_landcover(client, source_tif: Path, temp_dir: Path) -> dict:
+def build_landcover(client, source_tif: Path, temp_dir: Path, existing_sizes: dict[str, int]) -> dict:
     global_tif = temp_dir / "landcover-global-0p025.tif"
     if not global_tif.exists():
         log("Downsampling global MODIS categorical land cover to a 0.025° grid")
@@ -314,9 +319,14 @@ def build_landcover(client, source_tif: Path, temp_dir: Path) -> dict:
                 mapped = mapping[data]
                 compressed = gzip.compress(mapped.tobytes(order="C"), compresslevel=9, mtime=0)
                 key = f"{PREFIX}/landcover/{y}_{x}.bin.gz"
-                put_bytes(client, key, compressed, "application/gzip")
+                if key in existing_sizes:
+                    size = existing_sizes[key]
+                else:
+                    put_bytes(client, key, compressed, "application/gzip")
+                    size = len(compressed)
+                    existing_sizes[key] = size
                 stored += 1
-                total_bytes += len(compressed)
+                total_bytes += size
             if (y + 1) % 3 == 0:
                 log(f"Land cover: {stored}/648 tiles uploaded; {total_bytes / (1024**2):.1f} MiB compressed")
     return {
@@ -328,12 +338,25 @@ def build_landcover(client, source_tif: Path, temp_dir: Path) -> dict:
         "sourceCoverage": {"west": -180, "south": -62.00081, "east": 179.99994, "north": 87.37},
     }
 
+def list_existing_global_tiles(client) -> dict[str, int]:
+    existing: dict[str, int] = {}
+    paginator = client.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=BUCKET, Prefix=PREFIX + "/"):
+        for item in page.get("Contents", []):
+            key = item.get("Key")
+            if key:
+                existing[key] = int(item.get("Size", 0))
+    log(f"Found {len(existing):,} existing global R2 objects; valid tile keys will be reused.")
+    return existing
+
+
 def main() -> None:
     client = r2_client()
     work = Path(tempfile.mkdtemp(prefix="rw-map-forge-global-terrain-"))
     temp_dir = work / "tile-tmp"
     temp_dir.mkdir()
     metrics = {"ready": True, "datasetVersion": "global-v1"}
+    existing_sizes = list_existing_global_tiles(client)
     mark_manifest(client, False, statusMessage="Global terrain dataset import is running; don't use uncached terrain until ready.")
 
     try:
@@ -344,7 +367,7 @@ def main() -> None:
         rivers_shp = extract_shapefile(zip_path, rivers_dir, "HydroRIVERS_v10.shp")
         metrics["rivers"] = build_vector_grid(
             client, rivers_shp, "rivers", HYDRO_DEG,
-            '"ORD_STRA" >= 3', "HYRIV_ID,ORD_STRA", "0.0015", temp_dir
+            '"ORD_STRA" >= 3', "HYRIV_ID,ORD_STRA", "0.0015", temp_dir, existing_sizes
         )
         shutil.rmtree(rivers_dir, ignore_errors=True)
         zip_path.unlink(missing_ok=True)
@@ -356,7 +379,7 @@ def main() -> None:
         lakes_shp = extract_shapefile(zip_path, lakes_dir, "HydroLAKES_polys_v10.shp")
         metrics["water"] = build_vector_grid(
             client, lakes_shp, "water", HYDRO_DEG,
-            None, "Hylak_id", "0.001", temp_dir
+            None, "Hylak_id", "0.001", temp_dir, existing_sizes
         )
         shutil.rmtree(lakes_dir, ignore_errors=True)
         zip_path.unlink(missing_ok=True)
@@ -369,7 +392,7 @@ def main() -> None:
         roads_shp = extract_shapefile(zip_path, roads_dir, "ne_10m_roads.shp")
         metrics["roads"] = build_vector_grid(
             client, roads_shp, "roads", ROAD_DEG,
-            None, "ne_id,type", "0.001", temp_dir
+            None, "ne_id,type", "0.001", temp_dir, existing_sizes
         )
         shutil.rmtree(roads_dir, ignore_errors=True)
         zip_path.unlink(missing_ok=True)
@@ -377,7 +400,7 @@ def main() -> None:
         # MODIS MCD12Q1 2021 IGBP class raster; 156 MB source, compact tile cache output.
         land_tif = work / "modis-landcover-2021.tif"
         download(MODIS_LANDCOVER_URL, land_tif)
-        metrics["landcover"] = build_landcover(client, land_tif, temp_dir)
+        metrics["landcover"] = build_landcover(client, land_tif, temp_dir, existing_sizes)
         land_tif.unlink(missing_ok=True)
 
         metrics.update({
