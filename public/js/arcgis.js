@@ -84,8 +84,21 @@
   }
 
   function featureToElements(feature, kind, bbox, firstId) {
-    const g = feature && feature.geometry;
-    if (!g || !g.type || !g.coordinates || !bbox) return [];
+    const rawGeometry = feature && feature.geometry;
+    if (!rawGeometry || !bbox) return [];
+    let g = rawGeometry;
+    // ArcGIS FeatureServer queries reliably support f=json; translate Esri JSON
+    // geometries to the small GeoJSON-like shape used by the rasterizer.
+    if (!g.type && Array.isArray(g.rings)) {
+      g = { type: 'Polygon', coordinates: g.rings };
+    } else if (!g.type && Array.isArray(g.paths)) {
+      g = g.paths.length > 1
+        ? { type: 'MultiLineString', coordinates: g.paths }
+        : { type: 'LineString', coordinates: g.paths[0] || [] };
+    } else if (!g.type && Number.isFinite(g.x) && Number.isFinite(g.y)) {
+      return [];
+    }
+    if (!g.type || !g.coordinates) return [];
     const properties = feature.properties || feature.attributes || {};
     let tags;
     if (kind === 'water') tags = { natural: 'water' };
