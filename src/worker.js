@@ -130,7 +130,7 @@ async function handleGlobalTerrainTile(url, ctx, env, kind) {
     if (kind === 'hydro') {
       source = url.searchParams.get('source');
       if (!['water', 'rivers', 'roads'].includes(source)) return json({ error: 'Invalid hydro tile source' }, 400);
-      const degrees = source === 'roads' ? 10 : 2;
+      const degrees = source === 'roads' ? 10 : 4;
       maxX = 360 / degrees - 1;
       maxY = 180 / degrees - 1;
       const x = boundedIndex(url.searchParams.get('x'), maxX, 'x');
