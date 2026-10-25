@@ -145,6 +145,9 @@ function arcgisQueryUrl(endpoint, bbox, source) {
     outSR: '4326',
     returnGeometry: 'true',
     resultRecordCount: source === 'water' ? '1800' : (source === 'land' ? '900' : '1000'),
+    // Generalize large coastlines and water polygons at roughly map-tile scale to reduce payloads.
+    maxAllowableOffset: '0.0005',
+    geometryPrecision: '5',
     f: 'json',
   };
   Object.keys(p).forEach((k) => u.searchParams.set(k, p[k]));
