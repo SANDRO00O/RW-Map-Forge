@@ -153,7 +153,7 @@ const fakeFeatureCollection = {
       geometry: { type: 'LineString', coordinates: [[47.5, 30.4], [47.6, 30.5]] },
     }],
   };
-  r2Stored.set('global/v1/hydro/rivers/45_90.geojson.gz', gzipSync(Buffer.from(JSON.stringify(collection))));
+  r2Stored.set('global/v1/hydro/rivers/22_45.geojson.gz', gzipSync(Buffer.from(JSON.stringify(collection))));
   const landValues = Buffer.alloc(400 * 400, 5);
   r2Stored.set('global/v1/landcover/3_2.bin.gz', gzipSync(landValues));
 
@@ -165,13 +165,13 @@ const fakeFeatureCollection = {
   assert.equal(status.tileCounts.rivers, 123);
   await Promise.all(ctx.pending);
 
-  const hydroRes = await handleApiRequest(new Request('https://rw-map-forge.pages.dev/api/hydro-tile?source=rivers&x=90&y=45'), ctxWithWaitUntil(), { TERRAIN_CACHE: r2 });
+  const hydroRes = await handleApiRequest(new Request('https://rw-map-forge.pages.dev/api/hydro-tile?source=rivers&x=45&y=22'), ctxWithWaitUntil(), { TERRAIN_CACHE: r2 });
   assert.equal(hydroRes.status, 200);
   assert.equal(hydroRes.headers.get('content-type'), 'application/gzip');
   const decodedHydro = JSON.parse(gunzipSync(Buffer.from(await hydroRes.arrayBuffer())).toString('utf8'));
   assert.equal(decodedHydro.features[0].properties.HYRIV_ID, 42);
 
-  const emptyRes = await handleApiRequest(new Request('https://rw-map-forge.pages.dev/api/hydro-tile?source=water&x=91&y=45'), ctxWithWaitUntil(), { TERRAIN_CACHE: r2 });
+  const emptyRes = await handleApiRequest(new Request('https://rw-map-forge.pages.dev/api/hydro-tile?source=water&x=46&y=22'), ctxWithWaitUntil(), { TERRAIN_CACHE: r2 });
   assert.equal(emptyRes.status, 200);
   assert.equal(emptyRes.headers.get('x-global-tile-empty'), '1');
   assert.equal((await emptyRes.json()).features.length, 0);
