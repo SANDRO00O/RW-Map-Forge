@@ -4,7 +4,8 @@
  * Static files are served by Workers Static Assets (see wrangler.toml); this Worker only handles /api/*:
  *
  *   GET  /api/dem?z=&x0=&x1=&y0=&y1=   batch of Terrarium elevation tiles in ONE round trip (fetched in parallel at the edge)
- *   POST /api/osm                       Overpass proxy: hedged requests across mirrors + edge cache
+ *   POST /api/terrain-features          global water, river and land-cover features via ArcGIS REST + edge cache
+ *   POST /api/osm                       optional Overpass proxy used only for the roads overlay
  *   GET  /api/geocode?q=                Nominatim proxy with a proper User-Agent + edge cache
  *   GET  /api/health
  *
@@ -40,6 +41,7 @@ export async function handleApiRequest(request, ctx) {
   try {
     if (url.pathname === '/api/health') return json({ ok: true });
     if (url.pathname === '/api/dem' && request.method === 'GET') return await handleDem(request, url, ctx);
+    if (url.pathname === '/api/terrain-features' && request.method === 'POST') return await handleTerrainFeatures(request, ctx);
     if (url.pathname === '/api/osm' && request.method === 'POST') return await handleOsm(request, ctx);
     if (url.pathname === '/api/geocode' && request.method === 'GET') return await handleGeocode(url, ctx);
     return json({ error: 'Not found' }, 404);
@@ -122,6 +124,155 @@ async function handleDem(request, url, ctx) {
   });
   if (present === count) ctx.waitUntil(cache.put(key, res.clone()));
   return res;
+}
+
+/* -------------------------------------- ArcGIS terrain features */
+const ARCGIS = {
+  water: 'https://services2.arcgis.com/IsDCghZ73NgoYoz5/ArcGIS/rest/services/World_Water_Bodies_World/FeatureServer/0/query',
+  rivers: 'https://services.arcgis.com/Z58T9dmhcpCmous1/arcgis/rest/services/Detailed_Linear_Hydrology/FeatureServer/0/query',
+  land: 'https://services.arcgis.com/8df8p0NlLFEShl0r/arcgis/rest/services/Land_Cover/FeatureServer/0/query',
+};
+
+function arcgisQueryUrl(endpoint, bbox, outFields, maxRecords) {
+  const u = new URL(endpoint);
+  const p = {
+    where: '1=1',
+    outFields: outFields,
+    geometry: [bbox.w, bbox.s, bbox.e, bbox.n].join(','),
+    geometryType: 'esriGeometryEnvelope',
+    spatialRel: 'esriSpatialRelIntersects',
+    inSR: '4326',
+    outSR: '4326',
+    returnGeometry: 'true',
+    returnZ: 'false',
+    returnM: 'false',
+    resultRecordCount: String(maxRecords),
+    f: 'geojson',
+  };
+  Object.keys(p).forEach((k) => u.searchParams.set(k, p[k]));
+  return u.toString();
+}
+
+async function fetchArcgisFeatures(endpoint, bbox, outFields, maxRecords, label) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 14000);
+  try {
+    const r = await fetch(arcgisQueryUrl(endpoint, bbox, outFields, maxRecords), {
+      headers: { 'user-agent': UA, 'accept': 'application/geo+json, application/json' },
+      signal: ctl.signal,
+    });
+    const body = await r.text();
+    if (!r.ok) throw new Error(label + ' returned HTTP ' + r.status + (body ? ': ' + body.replace(/\s+/g, ' ').slice(0, 160) : ''));
+    let data;
+    try { data = JSON.parse(body); } catch (_) { throw new Error(label + ' returned invalid JSON'); }
+    if (data && data.error) throw new Error(label + ' API error: ' + String(data.error.message || data.error.code || 'unknown error'));
+    if (!data || !Array.isArray(data.features)) throw new Error(label + ' response did not contain GeoJSON features');
+    return data.features;
+  } catch (err) {
+    if (ctl.signal.aborted) throw new Error(label + ' timed out after 14 seconds');
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function arcgisLandTags(properties) {
+  const entry = Object.entries(properties || {}).find(([k]) => k.toLowerCase() === 'land_cover');
+  const name = String(entry ? entry[1] : '').toLowerCase();
+  if (name === 'lakes') return { natural: 'water' };
+  if (name.includes('forest') || name === 'mangroves') return { natural: 'wood' };
+  if (name === 'deserts') return { natural: 'desert' };
+  if (name === 'bare earth' || name === 'rock and ice') return { natural: 'bare_rock' };
+  if (name === 'swamp') return { natural: 'wetland' };
+  if (name.includes('grassland')) return { natural: 'grassland' };
+  return null;
+}
+
+function arcgisFeatureToElements(feature, kind, firstId) {
+  const g = feature && feature.geometry;
+  if (!g || !g.type || !g.coordinates) return [];
+  let tags;
+  if (kind === 'water') tags = { natural: 'water' };
+  else if (kind === 'river') tags = { waterway: 'river' };
+  else tags = arcgisLandTags(feature.properties || feature.attributes || {});
+  if (!tags) return [];
+
+  const point = (p) => {
+    if (!Array.isArray(p) || p.length < 2) return null;
+    const lon = Number(p[0]), lat = Number(p[1]);
+    return Number.isFinite(lat) && Number.isFinite(lon) ? { lat: lat, lon: lon } : null;
+  };
+  const line = (coords) => (Array.isArray(coords) ? coords.map(point).filter(Boolean) : []);
+  const out = [];
+  let id = firstId;
+
+  const addPolygon = (rings) => {
+    const members = (rings || []).filter((ring) => Array.isArray(ring) && ring.length >= 4).map((ring, i) => ({
+      type: 'way', role: i === 0 ? 'outer' : 'inner', ref: id++, geometry: line(ring),
+    })).filter((m) => m.geometry.length >= 4);
+    if (members.length) out.push({ type: 'relation', id: id++, tags: tags, members: members });
+  };
+  const addLine = (coords) => {
+    const geometry = line(coords);
+    if (geometry.length > 1) out.push({ type: 'way', id: id++, tags: tags, geometry: geometry });
+  };
+
+  if (g.type === 'Polygon') addPolygon(g.coordinates);
+  else if (g.type === 'MultiPolygon') g.coordinates.forEach(addPolygon);
+  else if (g.type === 'LineString') addLine(g.coordinates);
+  else if (g.type === 'MultiLineString') g.coordinates.forEach(addLine);
+  return out;
+}
+
+async function handleTerrainFeatures(request, ctx) {
+  const input = await request.json();
+  const bbox = input && input.bbox;
+  const water = !!(input && input.water);
+  const land = !!(input && input.land);
+  if (!bbox || !['s', 'w', 'n', 'e'].every((k) => Number.isFinite(Number(bbox[k]))) ||
+      Number(bbox.s) >= Number(bbox.n) || Number(bbox.w) >= Number(bbox.e) ||
+      Math.abs(Number(bbox.s)) > 85 || Math.abs(Number(bbox.n)) > 85 ||
+      Math.abs(Number(bbox.w)) > 180 || Math.abs(Number(bbox.e)) > 180 || (!water && !land)) {
+    return json({ error: 'Invalid terrain feature request' }, 400);
+  }
+  const bb = { s: Number(bbox.s), w: Number(bbox.w), n: Number(bbox.n), e: Number(bbox.e) };
+  const cache = caches.default;
+  const cacheKey = new Request('https://terrain-cache.invalid/' + (await sha256Hex(JSON.stringify({ bbox: bb, water: water, land: land }))), { method: 'GET' });
+  const hit = await cache.match(cacheKey);
+  if (hit) return hit;
+
+  const jobs = [];
+  if (water) {
+    jobs.push({ kind: 'water', label: 'World water bodies', run: () => fetchArcgisFeatures(ARCGIS.water, bb, '*', 1800, 'World water bodies') });
+    jobs.push({ kind: 'river', label: 'world linear water', run: () => fetchArcgisFeatures(ARCGIS.rivers, bb, '*', 1000, 'World linear water') });
+  }
+  if (land) jobs.push({ kind: 'land', label: 'global land cover', run: () => fetchArcgisFeatures(ARCGIS.land, bb, 'Land_cover', 900, 'Global land cover') });
+
+  const settled = await Promise.all(jobs.map(async (job) => {
+    try { return { job: job, features: await job.run(), error: null }; }
+    catch (err) { return { job: job, features: [], error: String((err && err.message) || err) }; }
+  }));
+  const successful = settled.filter((x) => !x.error).length;
+  const errors = settled.filter((x) => x.error).map((x) => x.job.label + ': ' + x.error);
+  if (!successful) return json({ error: 'Alternative terrain data services failed: ' + errors.join(' | ') }, 502);
+
+  let elements = [];
+  let nextId = 1;
+  for (const result of settled) {
+    if (result.error) continue;
+    for (const feature of result.features) {
+      const converted = arcgisFeatureToElements(feature, result.job.kind, nextId);
+      elements = elements.concat(converted);
+      nextId += converted.length + 1;
+    }
+  }
+  const result = json({
+    elements: elements,
+    source: 'Esri World Water Bodies + Detailed Linear Hydrology + University of Minnesota Global Land Cover',
+    warnings: errors,
+  }, 200, { 'cache-control': 'public, max-age=' + DAY });
+  ctx.waitUntil(cache.put(cacheKey, result.clone()));
+  return result;
 }
 
 /* ------------------------------------------------------------------ OSM */
