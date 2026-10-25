@@ -9,7 +9,7 @@
     "dev": "wrangler dev",
     "dev:local": "node tests/dev-server.mjs",
     "deploy": "wrangler deploy",
-    "test": "node tests/test-gen.mjs"
+    "test": "node tests/test-gen.mjs && node tests/test-worker.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"
