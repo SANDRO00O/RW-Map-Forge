@@ -28,23 +28,28 @@ async function inflate(u8) {
 /** Reads a Terrarium PNG without a canvas (canvas readback can be altered by privacy features). Returns half-meter Int16 values. */
 async function decodePngElevation(bytes) {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (bytes[0] !== 0x89 || bytes[1] !== 0x50) throw new Error('Not a PNG');
-  let pos = 8, w = 0, h = 0, depth = 0, ctype = 0, interlace = 0, total = 0;
+  if (bytes.length < 33 || bytes[0] !== 0x89 || bytes[1] !== 0x50 || bytes[2] !== 0x4e || bytes[3] !== 0x47 ||
+      bytes[4] !== 0x0d || bytes[5] !== 0x0a || bytes[6] !== 0x1a || bytes[7] !== 0x0a) throw new Error('Not a complete PNG');
+  let pos = 8, w = 0, h = 0, depth = 0, ctype = 0, interlace = 0, total = 0, hasIend = false;
   const idat = [];
   while (pos + 8 <= bytes.length) {
     const len = dv.getUint32(pos);
+    if (pos + 12 + len > bytes.length) throw new Error('Truncated PNG chunk');
     const type = String.fromCharCode(bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]);
     if (type === 'IHDR') { w = dv.getUint32(pos + 8); h = dv.getUint32(pos + 12); depth = bytes[pos + 16]; ctype = bytes[pos + 17]; interlace = bytes[pos + 20]; }
     else if (type === 'IDAT') { idat.push(bytes.subarray(pos + 8, pos + 8 + len)); total += len; }
-    else if (type === 'IEND') break;
+    else if (type === 'IEND') { hasIend = true; break; }
     pos += 12 + len;
   }
+  if (!hasIend) throw new Error('PNG is missing its end marker');
   if (w !== 256 || h !== 256 || depth !== 8 || interlace !== 0 || (ctype !== 2 && ctype !== 6)) throw new Error('Unsupported PNG layout');
   const all = new Uint8Array(total);
   let o = 0;
   for (const c of idat) { all.set(c, o); o += c.length; }
   const raw = await inflate(all);
-  const bpp = ctype === 2 ? 3 : 4, stride = w * bpp, px = new Uint8Array(stride * h);
+  const bpp = ctype === 2 ? 3 : 4, stride = w * bpp;
+  if (raw.length !== h * (stride + 1)) throw new Error('Elevation PNG decompressed to an incomplete scanline buffer');
+  const px = new Uint8Array(stride * h);
   for (let y = 0; y < h; y++) {
     const ft = raw[y * (stride + 1)], src = y * (stride + 1) + 1, dst = y * stride;
     for (let i = 0; i < stride; i++) {
