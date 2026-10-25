@@ -211,7 +211,7 @@ async function loadOsm(geo, o) {
   const sources = [];
   if (o.water) {
     sources.push({ source: 'water', label: 'water bodies', kind: 'water' });
-    sources.push({ source: 'rivers', label: 'linear rivers', kind: 'rivers' });
+    sources.push({ source: 'rivers', label: 'major rivers', kind: 'rivers' });
   }
   if (o.land) sources.push({ source: 'land', label: 'land cover', kind: 'land' });
 
