@@ -1,0 +1,53 @@
+name: Import global terrain datasets to R2
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_global_import:
+        description: "This downloads and processes global datasets, then writes many objects to the R2 bucket."
+        type: choice
+        options:
+          - "no"
+          - "yes"
+        default: "no"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rw-map-forge-global-terrain-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    if: inputs.confirm_global_import == 'yes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      MAX_UPLOAD_GB: "9"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install geospatial tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gdal-bin unzip
+          python -m pip install --upgrade pip
+          python -m pip install boto3 numpy rasterio
+
+      - name: Validate import credentials
+        run: |
+          test -n "$R2_ACCOUNT_ID" || (echo "Missing secret R2_ACCOUNT_ID" && exit 1)
+          test -n "$R2_ACCESS_KEY_ID" || (echo "Missing secret R2_ACCESS_KEY_ID" && exit 1)
+          test -n "$R2_SECRET_ACCESS_KEY" || (echo "Missing secret R2_SECRET_ACCESS_KEY" && exit 1)
+          gdalinfo --version
+          ogrinfo --version
+
+      - name: Import and preprocess global terrain datasets
+        run: python scripts/import-global-terrain.py
