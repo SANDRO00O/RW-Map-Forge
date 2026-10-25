@@ -28,6 +28,68 @@ const OVERPASS = [
 const MAX_TILES = 20; // up to 2 upstream host attempts per tile; remain under the 50-subrequest free-plan limit
 const DAY = 86400;
 
+// Best-effort per-client guard for Pages Functions. It uses isolate memory only:
+// no KV/R2 writes are made for counters, so the protection itself cannot create
+// additional storage operations. Cloudflare's platform DDoS mitigation remains
+// the outer layer; this local limiter is not a globally strict counter.
+const RATE_WINDOW_MS = 60_000;
+const RATE_BUCKET_CAP = 10_000;
+const rateBuckets = new Map();
+const API_RATE_POLICIES = {
+  '/api/hydro-tile': { bucket: 'global-terrain-tiles', limit: 120 },
+  '/api/landcover-tile': { bucket: 'global-terrain-tiles', limit: 120 },
+  '/api/terrain-status': { bucket: 'terrain-status', limit: 60 },
+  '/api/dem': { bucket: 'elevation', limit: 12 },
+  '/api/terrain-features': { bucket: 'remote-terrain', limit: 12 },
+  '/api/osm': { bucket: 'overpass', limit: 6 },
+  '/api/geocode': { bucket: 'geocode', limit: 15 },
+};
+
+function rateLimitResponse(limit, retryAfter) {
+  return json({ error: 'Too many requests. Please wait a moment and try again.' }, 429, {
+    'cache-control': 'no-store',
+    'retry-after': String(Math.max(1, retryAfter)),
+    'x-rw-rate-limit': String(limit),
+  });
+}
+
+function enforceLocalRateLimit(request, pathname, now = Date.now()) {
+  const policy = API_RATE_POLICIES[pathname];
+  if (!policy) return null;
+
+  // Cloudflare sets CF-Connecting-IP at its edge. Skip only in local/unit
+  // environments where that trusted edge header does not exist.
+  const ip = request.headers.get('cf-connecting-ip');
+  if (!ip) return null;
+  const key = ip.slice(0, 128) + '|' + policy.bucket;
+  let entry = rateBuckets.get(key);
+
+  if (!entry || now - entry.startedAt >= RATE_WINDOW_MS || now < entry.startedAt) {
+    entry = { startedAt: now, count: 1 };
+    rateBuckets.set(key, entry);
+  } else if (entry.count >= policy.limit) {
+    const retry = Math.ceil((entry.startedAt + RATE_WINDOW_MS - now) / 1000);
+    return rateLimitResponse(policy.limit, retry);
+  } else {
+    entry.count++;
+  }
+
+  // Bound isolate memory under botnets that rotate source IPs.
+  if (rateBuckets.size > RATE_BUCKET_CAP) {
+    for (const [existingKey, value] of rateBuckets) {
+      if (now - value.startedAt >= RATE_WINDOW_MS || now < value.startedAt) rateBuckets.delete(existingKey);
+      if (rateBuckets.size <= RATE_BUCKET_CAP * 0.8) break;
+    }
+    while (rateBuckets.size > RATE_BUCKET_CAP) {
+      const oldestKey = rateBuckets.keys().next().value;
+      if (oldestKey === undefined) break;
+      rateBuckets.delete(oldestKey);
+    }
+  }
+
+  return null;
+}
+
 const json = (obj, status = 200, extra = {}) =>
   new Response(JSON.stringify(obj), {
     status,
@@ -39,6 +101,9 @@ export async function handleApiRequest(request, ctx, workerEnv) {
   if (!url.pathname.startsWith('/api/')) return null;
 
   try {
+    const denied = enforceLocalRateLimit(request, url.pathname);
+    if (denied) return denied;
+
     if (url.pathname === '/api/health') return json({ ok: true, terrainCache: !!((workerEnv || (ctx && ctx.env) || {}).TERRAIN_CACHE) });
     if (url.pathname === '/api/terrain-status' && request.method === 'GET') return await handleGlobalTerrainStatus(ctx, workerEnv || (ctx && ctx.env) || {});
     if (url.pathname === '/api/hydro-tile' && request.method === 'GET') return await handleGlobalTerrainTile(url, ctx, workerEnv || (ctx && ctx.env) || {}, 'hydro');
