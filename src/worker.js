@@ -34,14 +34,14 @@ const json = (obj, status = 200, extra = {}) =>
     headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...extra },
   });
 
-export async function handleApiRequest(request, ctx) {
+export async function handleApiRequest(request, ctx, workerEnv) {
   const url = new URL(request.url);
   if (!url.pathname.startsWith('/api/')) return null;
 
   try {
     if (url.pathname === '/api/health') return json({ ok: true });
     if (url.pathname === '/api/dem' && request.method === 'GET') return await handleDem(request, url, ctx);
-    if (url.pathname === '/api/terrain-features' && request.method === 'POST') return await handleTerrainFeatures(request, ctx);
+    if (url.pathname === '/api/terrain-features' && request.method === 'POST') return await handleTerrainFeatures(request, ctx, workerEnv || (ctx && ctx.env) || {});
     if (url.pathname === '/api/osm' && request.method === 'POST') return await handleOsm(request, ctx);
     if (url.pathname === '/api/geocode' && request.method === 'GET') return await handleGeocode(url, ctx);
     return json({ error: 'Not found' }, 404);
@@ -52,7 +52,7 @@ export async function handleApiRequest(request, ctx) {
 
 export default {
   async fetch(request, env, ctx) {
-    const apiResponse = await handleApiRequest(request, ctx);
+    const apiResponse = await handleApiRequest(request, ctx, env);
     if (apiResponse) return apiResponse;
     if (env && env.ASSETS) return env.ASSETS.fetch(request);
     return new Response('Not found', { status: 404 });
@@ -154,7 +154,36 @@ function arcgisQueryUrl(endpoint, bbox, source) {
   return u.toString();
 }
 
-async function handleTerrainFeatures(request, ctx) {
+function terrainCacheBounds(bbox) {
+  // Snap outwards to 0.001 degrees (~111 m latitude) so nearby requests reuse
+  // cached features while the browser still clips the geometry to its exact map.
+  return {
+    s: Math.floor(Number(bbox.s) * 1000) / 1000,
+    w: Math.floor(Number(bbox.w) * 1000) / 1000,
+    n: Math.ceil(Number(bbox.n) * 1000) / 1000,
+    e: Math.ceil(Number(bbox.e) * 1000) / 1000,
+  };
+}
+
+function terrainCacheKey(source, bbox) {
+  const coord = (n) => n.toFixed(3).replace('-', 'm').replace('.', 'p');
+  return 'terrain/v1/' + source + '/' +
+    coord(bbox.s) + '_' + coord(bbox.w) + '_' + coord(bbox.n) + '_' + coord(bbox.e) + '.json';
+}
+
+function terrainCacheResponse(body, source, cacheStatus) {
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'public, max-age=' + DAY,
+      'x-terrain-source': source === 'rivers' ? 'Hydrography service' : 'ArcGIS',
+      'x-terrain-cache': cacheStatus,
+    },
+  });
+}
+
+async function handleTerrainFeatures(request, ctx, env) {
   const input = await request.json();
   const bbox = input && input.bbox;
   const source = input && input.source;
@@ -165,35 +194,63 @@ async function handleTerrainFeatures(request, ctx) {
       Math.abs(Number(bbox.w)) > 180 || Math.abs(Number(bbox.e)) > 180) {
     return json({ error: 'Invalid terrain feature request' }, 400);
   }
-  const bb = { s: Number(bbox.s), w: Number(bbox.w), n: Number(bbox.n), e: Number(bbox.e) };
-  const cache = caches.default;
-  const cacheKey = new Request('https://terrain-cache.invalid/' + (await sha256Hex(JSON.stringify({ bbox: bb, source: source }))), { method: 'GET' });
-  const hit = await cache.match(cacheKey);
-  if (hit) return hit;
+
+  const bb = terrainCacheBounds(bbox);
+  const objectKey = terrainCacheKey(source, bb);
+  const r2 = env && env.TERRAIN_CACHE;
+
+  // Persistent cache is checked before the edge cache. A cached area no longer
+  // needs the upstream map-data provider to be available.
+  if (r2) {
+    try {
+      const object = await r2.get(objectKey);
+      if (object) return terrainCacheResponse(object.body, 'R2', 'HIT');
+    } catch (_) { /* preserve availability by falling back to the edge cache/upstream */ }
+  }
+
+  const edgeKey = new Request('https://terrain-cache-v2.invalid/' + encodeURIComponent(objectKey), { method: 'GET' });
+  const edgeHit = await caches.default.match(edgeKey);
+  if (edgeHit) {
+    if (r2) ctx.waitUntil(r2.put(objectKey, edgeHit.clone().body, {
+      httpMetadata: { contentType: 'application/json; charset=utf-8', cacheControl: 'public, max-age=' + DAY },
+      customMetadata: { source: source, cacheVersion: 'v1' },
+    }).catch(() => {}));
+    return terrainCacheResponse(edgeHit.body, 'edge', 'EDGE-HIT');
+  }
 
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 14000);
   try {
     const upstream = await fetch(arcgisQueryUrl(ARCGIS[source], bb, source), {
-      headers: { 'user-agent': UA, 'accept': 'application/geo+json, application/json' },
+      headers: { 'user-agent': UA, 'accept': 'application/json' },
       signal: ctl.signal,
     });
-    if (!upstream.ok) return json({ error: 'ArcGIS ' + source + ' request failed with HTTP ' + upstream.status }, 502);
-    // Pass through ArcGIS JSON without parsing it on the edge. Geometry conversion and
-    // clipping run in the browser's Web Worker, avoiding Cloudflare's CPU-time limit.
-    const result = new Response(upstream.body, {
-      status: 200,
-      headers: {
-        'content-type': upstream.headers.get('content-type') || 'application/json; charset=utf-8',
-        'cache-control': 'public, max-age=' + DAY,
-        'x-terrain-source': 'ArcGIS',
+    if (!upstream.ok) return json({ error: 'Terrain data source ' + source + ' returned HTTP ' + upstream.status }, 502);
+
+    const body = await upstream.text();
+    const trimmed = body.trimStart();
+    if (trimmed.startsWith('{"error"') || trimmed.startsWith('{ "error"') ||
+        !/"features"\s*:/.test(trimmed)) {
+      return json({ error: 'Terrain data source ' + source + ' did not return a valid feature collection' }, 502);
+    }
+
+    const result = terrainCacheResponse(body, 'upstream', 'MISS');
+    // Keep both a fast edge cache and a persistent R2 copy. R2 is deliberately
+    // best-effort: successful feature data is still returned if storage is unavailable.
+    ctx.waitUntil(caches.default.put(edgeKey, result.clone()).catch(() => {}));
+    if (r2) ctx.waitUntil(r2.put(objectKey, body, {
+      httpMetadata: { contentType: 'application/json; charset=utf-8', cacheControl: 'public, max-age=' + DAY },
+      customMetadata: {
+        source: source,
+        cacheVersion: 'v1',
+        cachedAt: new Date().toISOString(),
+        bounds: JSON.stringify(bb),
       },
-    });
-    ctx.waitUntil(cache.put(cacheKey, result.clone()));
+    }).catch(() => {}));
     return result;
   } catch (err) {
-    if (ctl.signal.aborted) return json({ error: 'ArcGIS ' + source + ' request timed out after 14 seconds' }, 502);
-    return json({ error: 'ArcGIS ' + source + ' request failed: ' + String((err && err.message) || err) }, 502);
+    if (ctl.signal.aborted) return json({ error: 'Terrain data source ' + source + ' timed out after 14 seconds' }, 502);
+    return json({ error: 'Terrain data source ' + source + ' failed: ' + String((err && err.message) || err) }, 502);
   } finally {
     clearTimeout(timer);
   }
