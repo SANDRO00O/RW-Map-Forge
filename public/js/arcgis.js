@@ -95,10 +95,70 @@
     return { highway: 'tertiary' };
   }
 
+  function collectPositions(value, out) {
+    if (!Array.isArray(value)) return;
+    if (value.length >= 2 && typeof value[0] === 'number' && typeof value[1] === 'number') {
+      if (Number.isFinite(value[0]) && Number.isFinite(value[1])) out.push([value[0], value[1]]);
+      return;
+    }
+    for (const child of value) collectPositions(child, out);
+  }
+
+  function extentOf(positions, swapped) {
+    const extent = { w: Infinity, s: Infinity, e: -Infinity, n: -Infinity };
+    for (const p of positions) {
+      const x = swapped ? p[1] : p[0], y = swapped ? p[0] : p[1];
+      extent.w = Math.min(extent.w, x); extent.e = Math.max(extent.e, x);
+      extent.s = Math.min(extent.s, y); extent.n = Math.max(extent.n, y);
+    }
+    return extent;
+  }
+
+  function extentIntersects(extent, bbox) {
+    return extent.e >= bbox.w && extent.w <= bbox.e && extent.n >= bbox.s && extent.s <= bbox.n;
+  }
+
+  function swapCoordinatePairs(value) {
+    if (!Array.isArray(value)) return value;
+    if (value.length >= 2 && typeof value[0] === 'number' && typeof value[1] === 'number') {
+      return [value[1], value[0], ...value.slice(2)];
+    }
+    return value.map(swapCoordinatePairs);
+  }
+
+  // Some packaged vector sources have latitude/longitude axis order even though
+  // the browser's converter expects GeoJSON longitude/latitude. Only swap when
+  // the original extent misses this map entirely and its swapped extent matches;
+  // standard GeoJSON that already intersects the map is left untouched.
+  function normalizeAxisOrder(geometry, bbox) {
+    const positions = [];
+    collectPositions(geometry && (geometry.coordinates || geometry.rings || geometry.paths), positions);
+    if (!positions.length) return { geometry: geometry, swapped: false };
+    const standard = extentOf(positions, false), swapped = extentOf(positions, true);
+    if (!extentIntersects(standard, bbox) && extentIntersects(swapped, bbox)) {
+      const coordinatesKey = Array.isArray(geometry.coordinates) ? 'coordinates'
+        : Array.isArray(geometry.rings) ? 'rings' : Array.isArray(geometry.paths) ? 'paths' : null;
+      if (!coordinatesKey) return { geometry: geometry, swapped: false };
+      const normalized = Object.assign({}, geometry);
+      normalized[coordinatesKey] = swapCoordinatePairs(geometry[coordinatesKey]);
+      // Keep Esri geometry containers in their native form until the caller maps
+      // rings/paths to GeoJSON-like coordinates.
+      if (coordinatesKey === 'rings') normalized.coordinates = normalized.rings;
+      else if (coordinatesKey === 'paths') normalized.coordinates = normalized.paths;
+      return { geometry: normalized, swapped: true };
+    }
+    return { geometry: geometry, swapped: false };
+  }
+
   function featureToElements(feature, kind, bbox, firstId) {
     const rawGeometry = feature && feature.geometry;
     if (!rawGeometry || !bbox) return [];
     let g = rawGeometry;
+    const properties = feature.properties || feature.attributes || {};
+    const normalized = normalizeAxisOrder(g, bbox);
+    g = normalized.geometry;
+    const stats = arguments.length > 4 && arguments[4];
+    if (stats && normalized.swapped) stats.axisSwapped = (stats.axisSwapped || 0) + 1;
     // ArcGIS FeatureServer queries reliably support f=json; translate Esri JSON
     // geometries to the small GeoJSON-like shape used by the rasterizer.
     if (!g.type && Array.isArray(g.rings)) {
@@ -110,8 +170,15 @@
     } else if (!g.type && Number.isFinite(g.x) && Number.isFinite(g.y)) {
       return [];
     }
+    if (g.type === 'GeometryCollection' && Array.isArray(g.geometries)) {
+      const elements = [];
+      g.geometries.forEach((geometry, index) => {
+        elements.push(...featureToElements({ properties: properties, geometry: geometry }, kind, bbox,
+          (Number.isFinite(firstId) ? firstId : 1) + index * 1000, stats));
+      });
+      return elements;
+    }
     if (!g.type || !g.coordinates) return [];
-    const properties = feature.properties || feature.attributes || {};
     let tags;
     if (kind === 'water') tags = { natural: 'water' };
     else if (kind === 'rivers') tags = { waterway: 'river' };
