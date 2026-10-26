@@ -1,7 +1,7 @@
 /* RW Map Forge - generation pipeline (Web Worker).
  * Keeps the UI responsive: downloads elevation + OSM data, classifies terrain and builds the TMX file off the main thread. */
 'use strict';
-importScripts('/js/gen.js', '/js/arcgis.js?v=vector-axis-normalization-20261026-1');
+importScripts('/js/gen.js?v=landcover-cell-smoothing-20261026-1', '/js/arcgis.js?v=vector-axis-normalization-20261026-1');
 const G = self.RWGen;
 const A = self.RWArcGIS;
 
@@ -467,7 +467,15 @@ function mercatorCellToGeo(geo, x, y) {
 
 async function sampleLandCover(geo, W, H) {
   const bbox = geo.bbox();
-  const tileRefs = tileIndicesForBounds(bbox, LAND_TILE_DEG);
+  // Include adjacent 0.025° source cells so the 3×3 categorical filter remains valid
+  // even when a map touches a 10° R2 tile edge.
+  const expandedBounds = {
+    s: Math.max(-90, bbox.s - LAND_TILE_RES),
+    w: bbox.w - LAND_TILE_RES,
+    n: Math.min(90, bbox.n + LAND_TILE_RES),
+    e: bbox.e + LAND_TILE_RES,
+  };
+  const tileRefs = tileIndicesForBounds(expandedBounds, LAND_TILE_DEG);
   const entries = await Promise.all(tileRefs.map(async (tile) => ({
     key: tile.x + '/' + tile.y,
     data: await fetchLandCoverTile(tile.x, tile.y),
@@ -479,15 +487,26 @@ async function sampleLandCover(geo, W, H) {
       const geoPos = mercatorCellToGeo(geo, x, y);
       const lon = geoPos.lon, lat = geoPos.lat;
       if (lat < -90 || lat > 90) continue;
-      const tx = Math.min(35, Math.max(0, Math.floor((lon + 180) / LAND_TILE_DEG)));
-      const ty = Math.min(17, Math.max(0, Math.floor((lat + 90) / LAND_TILE_DEG)));
-      const data = tiles.get(tx + '/' + ty);
-      if (!data) continue;
-      const tileWest = -180 + tx * LAND_TILE_DEG;
-      const tileNorth = -90 + (ty + 1) * LAND_TILE_DEG;
-      const col = Math.min(LAND_TILE_SIDE - 1, Math.max(0, Math.floor((lon - tileWest) / LAND_TILE_RES)));
-      const row = Math.min(LAND_TILE_SIDE - 1, Math.max(0, Math.floor((tileNorth - lat) / LAND_TILE_RES)));
-      mask[y * W + x] = data[row * LAND_TILE_SIDE + col];
+      const totalCols = 360 / LAND_TILE_RES;
+      const totalRows = 180 / LAND_TILE_RES;
+      const centerCol = Math.min(totalCols - 1, Math.max(0, Math.floor((normalizeLongitude(lon) + 180) / LAND_TILE_RES)));
+      const centerRow = Math.min(totalRows - 1, Math.max(0, Math.floor((90 - lat) / LAND_TILE_RES)));
+      const neighborhood = [];
+      for (let dy = -1; dy <= 1; dy++) {
+        const sourceRow = Math.min(totalRows - 1, Math.max(0, centerRow + dy));
+        const tileY = 17 - Math.floor(sourceRow / LAND_TILE_SIDE);
+        const localRow = sourceRow % LAND_TILE_SIDE;
+        for (let dx = -1; dx <= 1; dx++) {
+          const sourceCol = ((centerCol + dx + totalCols) % totalCols);
+          const tileX = Math.floor(sourceCol / LAND_TILE_SIDE);
+          const data = tiles.get(tileX + '/' + tileY);
+          neighborhood.push(data ? data[localRow * LAND_TILE_SIDE + (sourceCol % LAND_TILE_SIDE)] : 0);
+        }
+      }
+      // The imported MODIS raster is intentionally coarse (0.025° per cell).
+      // Use a 3×3 mode to suppress isolated square land-cover labels before they
+      // override the elevation-derived terrain classification.
+      mask[y * W + x] = G.landCoverMode(neighborhood);
     }
   }
   return mask;
@@ -545,7 +564,7 @@ async function loadSelfHostedOsm(geo, o) {
     try {
       progress('osm', 'Loading global land cover from local R2 tiles', 0.45);
       landCoverMask = await sampleLandCover(geo, geo.W, geo.H);
-      progress('osm', 'Loaded global MODIS land-cover grid from R2', 0.49);
+      progress('osm', 'Loaded global MODIS land-cover grid from R2 (3×3 smoothing)', 0.49);
       successes++;
     } catch (err) {
       progress('osm', 'Skipped local land cover: ' + (err.message || String(err)), 0.5);
