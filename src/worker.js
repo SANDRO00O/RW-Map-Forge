@@ -28,6 +28,20 @@ const OVERPASS = [
 const MAX_TILES = 20; // up to 2 upstream host attempts per tile; remain under the 50-subrequest free-plan limit
 const DAY = 86400;
 
+// PNG chunk CRC-32 lookup table, used to reject corrupted upstream elevation tiles
+// before they are included in or cached as a complete DEM batch.
+const PNG_CRC_TABLE = new Uint32Array(256);
+for (let n = 0; n < 256; n++) {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  PNG_CRC_TABLE[n] = c >>> 0;
+}
+function pngCrc32(bytes) {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = PNG_CRC_TABLE[(c ^ bytes[i]) & 255] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
 // Best-effort per-client guard for Pages Functions. It uses isolate memory only:
 // no KV/R2 writes are made for counters, so the protection itself cannot create
 // additional storage operations. Cloudflare's platform DDoS mitigation remains
@@ -293,7 +307,7 @@ function isValidElevationPng(bytes) {
       if (len > bytes.length - pos - 12) return false;
       const type = String.fromCharCode(bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]);
       const crc = dv.getUint32(pos + 8 + len, false);
-      if (crc32(bytes.subarray(pos + 4, pos + 8 + len)) !== crc) return false;
+      if (pngCrc32(bytes.subarray(pos + 4, pos + 8 + len)) !== crc) return false;
       if (!hasHeader && (type !== 'IHDR' || pos !== 8 || len !== 13)) return false;
       if (type === 'IHDR') {
         if (hasHeader || pos !== 8 || len !== 13) return false;
