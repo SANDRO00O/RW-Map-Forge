@@ -253,4 +253,44 @@ const fakeFeatureCollection = {
   assert.equal((await blocked.json()).error.includes('Too many requests'), true);
 }
 
+
+{
+  // Concurrent misses for one tile must share one R2 read, not fan out into a
+  // burst of identical object reads before the edge cache is populated.
+  edgeStored.clear();
+  r2Stored.set('global/v1/manifest.json', JSON.stringify({
+    ready: true, datasetVersion: 'global-v1', statusMessage: 'ready',
+    rivers: { nonEmptyCells: 1 }, water: { nonEmptyCells: 1 },
+    roads: { nonEmptyCells: 1 }, landcover: { tiles: 648 },
+  }));
+  const ctx = ctxWithWaitUntil();
+  const status = await handleApiRequest(
+    new Request('https://rw-map-forge.pages.dev/api/terrain-status'), ctx, { TERRAIN_CACHE: r2 },
+  );
+  assert.equal(status.status, 200);
+  await Promise.all(ctx.pending.splice(0));
+
+  const originalGet = r2.get.bind(r2);
+  let targetTileReads = 0;
+  r2.get = async (key) => {
+    if (key === 'global/v1/hydro/roads/20_20.geojson.gz') {
+      targetTileReads++;
+      await new Promise((resolve) => setTimeout(resolve, 15));
+    }
+    return originalGet(key);
+  };
+  try {
+    const url = 'https://rw-map-forge.pages.dev/api/hydro-tile?source=roads&x=20&y=20';
+    const requests = Array.from({ length: 12 }, () => handleApiRequest(
+      new Request(url, { headers: { 'cf-connecting-ip': '203.0.113.42' } }),
+      ctxWithWaitUntil(), { TERRAIN_CACHE: r2 },
+    ));
+    const responses = await Promise.all(requests);
+    assert.ok(responses.every((res) => res.status === 200));
+    assert.equal(targetTileReads, 1, 'concurrent cache misses should be coalesced into one R2 read');
+  } finally {
+    r2.get = originalGet;
+  }
+}
+
 console.log('Worker R2 terrain cache tests passed.');
