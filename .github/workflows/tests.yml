@@ -23,4 +23,5 @@ jobs:
       - name: Validate browser worker syntax
         run: |
           node --check public/js/pipeline.worker.js
+          node --check public/js/editor.js
           node --check public/js/arcgis.js
