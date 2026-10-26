@@ -30,18 +30,35 @@ async function decodePngElevation(bytes) {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (bytes.length < 33 || bytes[0] !== 0x89 || bytes[1] !== 0x50 || bytes[2] !== 0x4e || bytes[3] !== 0x47 ||
       bytes[4] !== 0x0d || bytes[5] !== 0x0a || bytes[6] !== 0x1a || bytes[7] !== 0x0a) throw new Error('Not a complete PNG');
-  let pos = 8, w = 0, h = 0, depth = 0, ctype = 0, interlace = 0, total = 0, hasIend = false;
+  let pos = 8, w = 0, h = 0, depth = 0, ctype = 0, interlace = 0, total = 0;
+  let hasHeader = false, hasIend = false, hasIdat = false, idatClosed = false;
   const idat = [];
-  while (pos + 8 <= bytes.length) {
+  while (pos + 12 <= bytes.length) {
     const len = dv.getUint32(pos);
-    if (pos + 12 + len > bytes.length) throw new Error('Truncated PNG chunk');
+    if (len > bytes.length - pos - 12) throw new Error('Truncated PNG chunk');
     const type = String.fromCharCode(bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]);
-    if (type === 'IHDR') { w = dv.getUint32(pos + 8); h = dv.getUint32(pos + 12); depth = bytes[pos + 16]; ctype = bytes[pos + 17]; interlace = bytes[pos + 20]; }
-    else if (type === 'IDAT') { idat.push(bytes.subarray(pos + 8, pos + 8 + len)); total += len; }
-    else if (type === 'IEND') { hasIend = true; break; }
+    const storedCrc = dv.getUint32(pos + 8 + len);
+    const actualCrc = crc32(bytes.subarray(pos + 4, pos + 8 + len));
+    if (actualCrc !== storedCrc) throw new Error('PNG chunk checksum mismatch in ' + type);
+    if (!hasHeader && (type !== 'IHDR' || pos !== 8 || len !== 13)) throw new Error('PNG IHDR chunk is missing or malformed');
+    if (type === 'IHDR') {
+      if (hasHeader || pos !== 8 || len !== 13) throw new Error('PNG has an invalid IHDR chunk');
+      w = dv.getUint32(pos + 8); h = dv.getUint32(pos + 12);
+      depth = bytes[pos + 16]; ctype = bytes[pos + 17]; interlace = bytes[pos + 20];
+      if (bytes[pos + 18] !== 0 || bytes[pos + 19] !== 0) throw new Error('Unsupported PNG compression or filter method');
+      hasHeader = true;
+    } else if (type === 'IDAT') {
+      if (idatClosed) throw new Error('PNG IDAT chunks are not contiguous');
+      idat.push(bytes.subarray(pos + 8, pos + 8 + len)); total += len; hasIdat = true;
+    } else if (type === 'IEND') {
+      if (len !== 0 || !hasIdat || pos + 12 !== bytes.length) throw new Error('PNG end marker is malformed or has trailing data');
+      hasIend = true; break;
+    } else if (hasIdat) {
+      idatClosed = true;
+    }
     pos += 12 + len;
   }
-  if (!hasIend) throw new Error('PNG is missing its end marker');
+  if (!hasHeader || !hasIdat || !hasIend) throw new Error('PNG is missing a required chunk');
   if (w !== 256 || h !== 256 || depth !== 8 || interlace !== 0 || (ctype !== 2 && ctype !== 6)) throw new Error('Unsupported PNG layout');
   const all = new Uint8Array(total);
   let o = 0;
@@ -62,7 +79,8 @@ async function decodePngElevation(bytes) {
       else if (ft === 1) v = x + a;
       else if (ft === 2) v = x + b;
       else if (ft === 3) v = x + ((a + b) >> 1);
-      else { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); v = x + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c); }
+      else if (ft === 4) { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); v = x + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c); }
+      else throw new Error('PNG contains an invalid scanline filter ' + ft);
       px[dst + i] = v & 255;
     }
   }
@@ -103,7 +121,8 @@ async function loadElevation(geo) {
   const z = G.demZoom(geo, 20), r = G.demRange(geo, z);
   const nx = r.tx1 - r.tx0 + 1, ny = r.ty1 - r.ty0 + 1;
   const expected = nx * ny;
-  const url = '/api/dem?z=' + z + '&x0=' + r.tx0 + '&x1=' + r.tx1 + '&y0=' + r.ty0 + '&y1=' + r.ty1;
+  // Version the batch-cache key so old, unchecked DEM batches cannot be reused.
+  const url = '/api/dem?v=png-crc-20261026-1&z=' + z + '&x0=' + r.tx0 + '&x1=' + r.tx1 + '&y0=' + r.ty0 + '&y1=' + r.ty1;
   let lastIssue = 'unknown elevation data error';
 
   // Partial batches are not valid terrain: retry them, then fail clearly instead
@@ -146,7 +165,12 @@ async function loadElevation(geo) {
           if (pos + 4 > dv.byteLength) throw new Error('Elevation batch ended before tile ' + tx + ',' + ty);
           const len = dv.getUint32(pos, true); pos += 4;
           if (!len || pos + len > dv.byteLength) throw new Error('Elevation tile ' + tx + ',' + ty + ' is missing or truncated');
-          const decoded = await decodeTile(new Uint8Array(buf, pos, len));
+          let decoded;
+          try {
+            decoded = await decodeTile(new Uint8Array(buf, pos, len));
+          } catch (err) {
+            throw new Error('Elevation tile ' + tx + ',' + ty + ' is corrupt: ' + (err && err.message || String(err)));
+          }
           if (!(decoded instanceof Int16Array) || decoded.length !== 65536) {
             throw new Error('Elevation tile ' + tx + ',' + ty + ' decoded to an invalid size');
           }
