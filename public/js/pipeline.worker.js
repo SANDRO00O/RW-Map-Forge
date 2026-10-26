@@ -432,7 +432,11 @@ async function fetchSelfHostedFeatures(source, bbox) {
     tile: tile,
     features: await fetchHydroTile(source, tile.x, tile.y),
   }));
-  return { features: dedupeGlobalFeatures(fetched.flatMap((r) => r.features)), tiles: tiles.length };
+  return {
+    features: dedupeGlobalFeatures(fetched.flatMap((r) => r.features)),
+    tiles: tiles.length,
+    tileKeys: tiles.map((tile) => tile.x + '/' + tile.y),
+  };
 }
 
 async function fetchLandCoverTile(x, y) {
@@ -491,6 +495,8 @@ async function sampleLandCover(geo, W, H) {
 
 async function loadSelfHostedOsm(geo, o) {
   const bbox = geo.bbox();
+  progress('osm', 'Clipping bounds: lat ' + bbox.s.toFixed(5) + '..' + bbox.n.toFixed(5) +
+    ', lon ' + bbox.w.toFixed(5) + '..' + bbox.e.toFixed(5), 0.245);
   let elements = [], successes = 0, landCoverMask = null;
   const sources = [];
   if (o.water) {
@@ -504,11 +510,22 @@ async function loadSelfHostedOsm(geo, o) {
       progress('osm', 'Loading ' + s.label + ' from locally hosted R2 tiles', 0.25);
       const result = await fetchSelfHostedFeatures(s.source, bbox);
       const converted = [];
+      const conversionStats = { axisSwapped: 0 };
       for (let i = 0; i < result.features.length; i++) {
-        converted.push(...A.featureToElements(result.features[i], s.kind, bbox, (i + 1) * 100000));
+        converted.push(...A.featureToElements(
+          result.features[i], s.kind, bbox, (i + 1) * 100000, conversionStats,
+        ));
+      }
+      if (conversionStats.axisSwapped) {
+        progress('osm', 'Normalized coordinate axes in ' + conversionStats.axisSwapped +
+          ' ' + s.label + ' source geometry item(s)', 0.41);
       }
       progress('osm', 'Loaded ' + converted.length + ' ' + s.label + ' features from R2 (' +
-        result.tiles + ' tile(s), ' + result.features.length + ' source records)', 0.42);
+        result.tiles + ' tile(s) [' + result.tileKeys.join(', ') + '], ' +
+        result.features.length + ' source records)', 0.42);
+      if (result.features.length && !converted.length) {
+        progress('osm', 'No ' + s.label + ' geometries intersected the clipping bounds; source records cover the larger R2 tile, not only this map.', 0.43);
+      }
       return { success: true, label: s.label, elements: converted };
     } catch (err) {
       return { success: false, label: s.label, error: err.message || String(err) };
