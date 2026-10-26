@@ -324,7 +324,7 @@
       actions.appendChild(copy);
     },
     async copyLog() {
-      const text = Array.from($('progLog').children).map((line) => line.textContent || '').join('\\n');
+      const text = Array.from($('progLog').children).map((line) => line.textContent || '').join('\n');
       if (!text) { UI.toast('The log is empty.', 'info'); return; }
       try {
         if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') throw new Error('Clipboard API unavailable');
