@@ -150,14 +150,13 @@
     return { geometry: geometry, swapped: false };
   }
 
-  function featureToElements(feature, kind, bbox, firstId) {
+  function featureToElements(feature, kind, bbox, firstId, stats) {
     const rawGeometry = feature && feature.geometry;
     if (!rawGeometry || !bbox) return [];
     let g = rawGeometry;
     const properties = feature.properties || feature.attributes || {};
     const normalized = normalizeAxisOrder(g, bbox);
     g = normalized.geometry;
-    const stats = arguments.length > 4 && arguments[4];
     if (stats && normalized.swapped) stats.axisSwapped = (stats.axisSwapped || 0) + 1;
     // ArcGIS FeatureServer queries reliably support f=json; translate Esri JSON
     // geometries to the small GeoJSON-like shape used by the rasterizer.
