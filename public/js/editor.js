@@ -51,6 +51,7 @@
     const st = Editor.st;
     st.reg = G.makeReg();
     st.ground = G.autotile(st.cls, st.W, st.H, st.reg, st.seed);
+    clearChunkCache();
     buildMini();
     const ids = st.reg.ids.concat(['misc']);
     const loaded = await Promise.all(ids.map(loadSet));
@@ -118,8 +119,8 @@
   // cap memory use on phones. Only visible chunks are built, and the LRU is
   // capped so exploring a 1000x1000 map cannot retain the entire map in RAM.
   const CHUNK_CELLS = 64;
-  const CHUNK_PIXELS = 8;
-  const MAX_CACHED_CHUNKS = 24;
+  const CHUNK_PIXELS = 10;
+  const MAX_CACHED_CHUNKS = 16;
 
   function clearChunkCache() {
     Editor.chunkCache.clear();
