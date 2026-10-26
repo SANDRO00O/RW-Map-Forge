@@ -26,23 +26,48 @@
   function loadSet(id) {
     if (Editor.imgs.has(id)) return Editor.imgs.get(id);
     const e = Editor.cat[id];
-    const p = new Promise((res) => {
-      const im = new Image();
-      im.onload = () => {
-        const c = document.createElement('canvas');
-        c.width = im.width; c.height = im.height;
-        const x = c.getContext('2d', { willReadFrequently: true });
-        x.drawImage(im, 0, 0);
-        const d = x.getImageData(0, 0, c.width, c.height), a = d.data;
-        const t = parseInt(e.trans || '008a76', 16), r = (t >> 16) & 255, g = (t >> 8) & 255, b = t & 255;
-        for (let i = 0; i < a.length; i += 4) if (a[i] === r && a[i + 1] === g && a[i + 2] === b) a[i + 3] = 0;
-        x.putImageData(d, 0, 0);
-        res({ canvas: c, e: e });
+    const p = new Promise((resolve, reject) => {
+      const maxAttempts = 3;
+      let attempt = 0;
+      const failOrRetry = (reason) => {
+        if (attempt < maxAttempts) {
+          // Retry transient network/cache failures and bypass a potentially stale
+          // cached error response on the next attempt.
+          setTimeout(load, 120 * attempt);
+          return;
+        }
+        const detail = reason && reason.message ? ': ' + reason.message : '';
+        reject(new Error('Could not load tileset image "' + id + '" after ' + maxAttempts + ' attempts' + detail));
       };
-      im.onerror = () => res(null);
-      im.src = e.png;
+      const load = () => {
+        attempt++;
+        const im = new Image();
+        im.onload = () => {
+          try {
+            if (!im.naturalWidth || !im.naturalHeight) throw new Error('Image has zero dimensions');
+            const c = document.createElement('canvas');
+            c.width = im.naturalWidth; c.height = im.naturalHeight;
+            const x = c.getContext('2d', { willReadFrequently: true });
+            if (!x) throw new Error('Could not create a canvas context');
+            x.drawImage(im, 0, 0);
+            const d = x.getImageData(0, 0, c.width, c.height), a = d.data;
+            const t = parseInt(e.trans || '008a76', 16), r = (t >> 16) & 255, g = (t >> 8) & 255, b = t & 255;
+            for (let i = 0; i < a.length; i += 4) if (a[i] === r && a[i + 1] === g && a[i + 2] === b) a[i + 3] = 0;
+            x.putImageData(d, 0, 0);
+            resolve({ canvas: c, e: e });
+          } catch (err) {
+            failOrRetry(err);
+          }
+        };
+        im.onerror = () => failOrRetry(new Error('Image request failed'));
+        const src = String(e && e.png || '');
+        im.src = attempt === 1 ? src : src + (src.includes('?') ? '&' : '?') + 'rw-preview-retry=' + attempt;
+      };
+      load();
     });
     Editor.imgs.set(id, p);
+    // Never keep a rejected promise in the image cache; a later retile can retry.
+    p.catch(() => { if (Editor.imgs.get(id) === p) Editor.imgs.delete(id); });
     return p;
   }
 
