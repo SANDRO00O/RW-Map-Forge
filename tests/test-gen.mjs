@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 import vm from 'node:vm';
@@ -6,6 +7,39 @@ import { readFileSync } from 'node:fs';
 const mod = { exports: {} };
 vm.runInNewContext(readFileSync(new URL('../public/js/gen.js', import.meta.url), 'utf8'), { module: mod, Buffer, console });
 const G = mod.exports;
+
+// Coarse categorical land-cover samples should not preserve isolated one-cell noise.
+assert.equal(G.landCoverMode([5, 5, 5, 5, 2, 5, 5, 5, 5]), 5,
+  'an isolated barren cell should follow the surrounding land-cover majority');
+assert.equal(G.landCoverMode([1, 1, 1, 1, 7, 1, 1, 1, 1]), 1,
+  'an isolated coarse water label should not survive the source-cell mode filter');
+assert.equal(G.landCoverMode(new Uint8Array(9)), 0,
+  'all no-data source cells should remain no-data');
+
+// MODIS water is coarse (~2.8 km per cell at the equator) and must not override
+// positive elevation; accurate water geometry is supplied separately.
+{
+  const width = 9, height = 9;
+  const classification = G.classify({
+    W: width,
+    H: height,
+    mpt: 100,
+    lat: 0,
+    elev: new Float32Array(width * height).fill(100),
+    land: new Uint8Array(width * height).fill(7),
+  }, { seaLevel: 0, smooth: 0, mountPct: 0, stonePct: 0, base: 'grass', beach: false });
+  assert.ok(Array.from(classification.cls).every(cls => cls !== G.C.SHALLOW),
+    'coarse MODIS water labels must not create square water patches on positive-elevation land');
+  const vectorWater = new Uint8Array(width * height);
+  vectorWater[4 * width + 4] = 1;
+  const withVectorWater = G.classify({
+    W: width, H: height, mpt: 100, lat: 0,
+    elev: new Float32Array(width * height).fill(100),
+    water: vectorWater,
+  }, { seaLevel: 0, smooth: 0, mountPct: 0, stonePct: 0, base: 'grass', beach: false });
+  assert.equal(withVectorWater.cls[4 * width + 4], G.C.SHALLOW,
+    'explicit water geometry must still be respected');
+}
 const zlib = require('zlib');
 const fs = require('fs');
 const os = require('os');
