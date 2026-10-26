@@ -75,6 +75,48 @@ function assertClipped(elements) {
 }
 
 {
+  // The imported R2 GeoJSON must still convert if a source emits latitude /
+  // longitude order. The converter only swaps when that orientation alone
+  // intersects the chosen map's bounds.
+  const mapBounds = { s: 46.52, w: 7.95, n: 46.58, e: 8.05 };
+  const swappedLineStats = {};
+  const river = A.featureToElements({
+    properties: { HYRIV_ID: 123 },
+    geometry: { type: 'MultiLineString', coordinates: [
+      [[46.50, 7.98], [46.60, 7.98]],
+    ] },
+  }, 'rivers', mapBounds, 50, swappedLineStats);
+  assert.equal(river.length, 1);
+  assert.equal(swappedLineStats.axisSwapped, 1);
+  assert.equal(river[0].geometry[0].lon, mapBounds.w);
+  assert.equal(river[0].geometry[river[0].geometry.length - 1].lon, mapBounds.e);
+  assertClippedTo(river, mapBounds);
+
+  const mapRing = [[46.50, 7.90], [46.60, 7.90], [46.60, 8.10], [46.50, 8.10], [46.50, 7.90]];
+  const lakeStats = {};
+  const lake = A.featureToElements({
+    properties: { HYLAK_ID: 456 },
+    geometry: { type: 'Polygon', coordinates: [mapRing] },
+  }, 'water', mapBounds, 60, lakeStats);
+  assert.equal(lake.length, 1);
+  assert.equal(lakeStats.axisSwapped, 1);
+  assertClippedTo(lake, mapBounds);
+}
+
+function assertClippedTo(elements, bounds) {
+  const points = [];
+  for (const element of elements) {
+    if (Array.isArray(element.geometry)) points.push(...element.geometry);
+    for (const member of element.members || []) if (Array.isArray(member.geometry)) points.push(...member.geometry);
+  }
+  assert.ok(points.length > 0, 'converted geometry should have coordinates');
+  for (const p of points) {
+    assert.ok(p.lon >= bounds.w - 1e-8 && p.lon <= bounds.e + 1e-8, 'longitude must remain inside map bounds');
+    assert.ok(p.lat >= bounds.s - 1e-8 && p.lat <= bounds.n + 1e-8, 'latitude must remain inside map bounds');
+  }
+}
+
+{
   assert.deepEqual(JSON.parse(JSON.stringify(A.roadTags({ type: 'Freeway' }))), { highway: 'motorway' });
   assert.deepEqual(JSON.parse(JSON.stringify(A.roadTags({ type: 'Secondary Highway' }))), { highway: 'secondary' });
   assert.deepEqual(JSON.parse(JSON.stringify(A.roadTags({ type: 'Minor Highway' }))), { highway: 'tertiary' });
