@@ -88,8 +88,8 @@ function assertClipped(elements) {
   }, 'rivers', mapBounds, 50, swappedLineStats);
   assert.equal(river.length, 1);
   assert.equal(swappedLineStats.axisSwapped, 1);
-  assert.equal(river[0].geometry[0].lon, mapBounds.w);
-  assert.equal(river[0].geometry[river[0].geometry.length - 1].lon, mapBounds.e);
+  assert.ok(Math.abs(river[0].geometry[0].lat - mapBounds.s) < 1e-8);
+  assert.ok(Math.abs(river[0].geometry[river[0].geometry.length - 1].lat - mapBounds.n) < 1e-8);
   assertClippedTo(river, mapBounds);
 
   const mapRing = [[46.50, 7.90], [46.60, 7.90], [46.60, 8.10], [46.50, 8.10], [46.50, 7.90]];
