@@ -273,14 +273,14 @@ const fakeFeatureCollection = {
   const originalGet = r2.get.bind(r2);
   let targetTileReads = 0;
   r2.get = async (key) => {
-    if (key === 'global/v1/hydro/roads/20_20.geojson.gz') {
+    if (key === 'global/v1/hydro/roads/10_20.geojson.gz') {
       targetTileReads++;
       await new Promise((resolve) => setTimeout(resolve, 15));
     }
     return originalGet(key);
   };
   try {
-    const url = 'https://rw-map-forge.pages.dev/api/hydro-tile?source=roads&x=20&y=20';
+    const url = 'https://rw-map-forge.pages.dev/api/hydro-tile?source=roads&x=20&y=10';
     const requests = Array.from({ length: 12 }, () => handleApiRequest(
       new Request(url, { headers: { 'cf-connecting-ip': '203.0.113.42' } }),
       ctxWithWaitUntil(), { TERRAIN_CACHE: r2 },
