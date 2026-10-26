@@ -298,6 +298,7 @@
       const actions = $('progActions'); actions.innerHTML = '';
       const cancel = UI.el('button', 'btn ghost', '<span>Cancel</span>'); cancel.type = 'button';
       cancel.addEventListener('click', onCancel); actions.appendChild(cancel);
+      Progress.addCopyAction(actions);
       Progress.mark();
     },
     mark(failAt) {
@@ -316,14 +317,58 @@
       Progress.log(msg);
     },
     log(msg, cls) { const d = UI.el('div', cls || '', UI.esc(msg)); $('progLog').appendChild(d); $('progLog').scrollTop = 1e6; },
+    addCopyAction(actions) {
+      const copy = UI.el('button', 'btn ghost', '<span>Copy log</span>');
+      copy.type = 'button';
+      copy.addEventListener('click', () => { Progress.copyLog(); });
+      actions.appendChild(copy);
+    },
+    async copyLog() {
+      const text = Array.from($('progLog').children).map((line) => line.textContent || '').join('\\n');
+      if (!text) { UI.toast('The log is empty.', 'info'); return; }
+      try {
+        if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') throw new Error('Clipboard API unavailable');
+        await navigator.clipboard.writeText(text);
+        UI.toast('Generation log copied.', 'ok');
+        return;
+      } catch (_) {
+        const field = document.createElement('textarea');
+        field.value = text;
+        field.setAttribute('readonly', '');
+        field.style.position = 'fixed';
+        field.style.opacity = '0';
+        document.body.appendChild(field);
+        field.select();
+        let copied = false;
+        try { copied = document.execCommand('copy'); } catch (_) { /* clipboard fallback unavailable */ }
+        field.remove();
+        UI.toast(copied ? 'Generation log copied.' : 'Could not copy the log. Check browser clipboard permissions.', copied ? 'ok' : 'err');
+      }
+    },
+    complete() {
+      $('progTitle').textContent = 'Generation complete';
+      Progress.log('Map is ready. Press Show to open the preview.', 'good');
+      const actions = $('progActions'); actions.innerHTML = '';
+      Progress.addCopyAction(actions);
+      const show = UI.el('button', 'btn primary', '<span>Show</span>');
+      show.type = 'button';
+      show.addEventListener('click', () => {
+        Progress.close();
+        showView('editor');
+        syncPanel();
+        UI.toast('Map generated. Place players and resources, then export.', 'ok');
+      });
+      actions.appendChild(show);
+    },
     fail(msg, code) {
-      Progress.mark(Math.max(0, Progress.idx));
+      Progress.mark(Math.min(STEPS.length - 1, Math.max(0, Progress.idx)));
       $('progTitle').textContent = 'Generation stopped';
       Progress.log(msg, 'bad');
       const actions = $('progActions'); actions.innerHTML = '';
-      const back = UI.el('button', 'btn primary', '<span>Back to ' + (code === 'ocean' ? 'location' : 'settings') + '</span>'); back.type = 'button';
+      const back = UI.el('button', 'btn ghost', '<span>Back to ' + (code === 'ocean' ? 'location' : 'settings') + '</span>'); back.type = 'button';
       back.addEventListener('click', () => { Progress.close(); showView(code === 'ocean' ? 'location' : 'settings'); });
       actions.appendChild(back);
+      Progress.addCopyAction(actions);
     },
     close() { $('progress').hidden = true; },
   };
@@ -350,15 +395,16 @@
       else if (m.type === 'error') { w.terminate(); generating = null; $('btnGenerate').disabled = false; Progress.fail(m.message, m.code); }
       else if (m.type === 'result') {
         w.terminate(); generating = null; $('btnGenerate').disabled = false;
-        Progress.update('done', 'Building preview', 1);
-        Editor.setState({ W: m.W, H: m.H, cls: m.cls, shade: m.shade, treeCand: m.treeCand, trees: m.trees, elev: m.elev, spawns: m.spawns, pools: m.pools, seed: m.seed });
-        await Editor.retile();
-        hasMap = true;
-        $('steps').querySelector('[data-view=editor]').disabled = false;
-        Progress.close();
-        showView('editor');
-        renderTeams(); syncPanel();
-        UI.toast('Map generated. Place players and resources, then export.', 'ok');
+        try {
+          Progress.update('done', 'Building preview', 1);
+          Editor.setState({ W: m.W, H: m.H, cls: m.cls, shade: m.shade, treeCand: m.treeCand, trees: m.trees, elev: m.elev, spawns: m.spawns, pools: m.pools, seed: m.seed });
+          await Editor.retile();
+          hasMap = true;
+          $('steps').querySelector('[data-view=editor]').disabled = false;
+          Progress.complete();
+        } catch (err) {
+          Progress.fail('Could not build the map preview: ' + (err && err.message ? err.message : 'unknown error'), 'preview');
+        }
       }
     };
     w.onerror = (e) => { w.terminate(); generating = null; $('btnGenerate').disabled = false; Progress.fail('The worker crashed: ' + (e.message || 'unknown error'), 'worker'); };
