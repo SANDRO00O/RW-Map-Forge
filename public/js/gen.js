@@ -231,6 +231,29 @@
     return sub[clamp(Math.floor(q * (n - 1)), 0, n - 1)];
   }
 
+  // Low-resolution MODIS land-cover cells can contain isolated categorical outliers.
+  // Use the 3×3 source-cell mode before allowing those labels to influence map terrain.
+  function landCoverMode(values) {
+    if (!values || !values.length) return 0;
+    const center = Number(values[Math.floor(values.length / 2)]) || 0;
+    const counts = new Map();
+    for (const raw of values) {
+      const value = Number(raw);
+      if (!Number.isInteger(value) || value <= 0) continue; // 0 is source no-data, not a land class.
+      counts.set(value, (counts.get(value) || 0) + 1);
+    }
+    if (!counts.size) return 0;
+    let best = counts.has(center) ? center : counts.keys().next().value;
+    let bestCount = counts.get(best) || 0;
+    for (const [value, count] of counts) {
+      if (count > bestCount || (count === bestCount && value === center)) {
+        best = value;
+        bestCount = count;
+      }
+    }
+    return best;
+  }
+
   // ------------------------------------------------------ classification ---
   // inp: {W,H,mpt,lat,elev:Float32Array, water?:Uint8Array, land?:Uint8Array, road?:Uint8Array}
   function classify(inp, pp) {
@@ -243,7 +266,9 @@
     const water = new Uint8Array(N), sea = new Uint8Array(N), land = new Uint8Array(N);
     for (let i = 0; i < N; i++) {
       const lowSea = e[i] <= p.seaLevel;
-      const w = lowSea || (osmWater && osmWater[i]) || (osmLand && osmLand[i] === 7);
+      // Only elevation and geometrically clipped water features can mark a cell as water.
+      // The 0.025° MODIS raster is too coarse to turn an entire multi-kilometre cell into water.
+      const w = lowSea || (osmWater && osmWater[i]);
       water[i] = w ? 1 : 0; sea[i] = lowSea ? 1 : 0; land[i] = w ? 0 : 1;
     }
     const cls = new Uint8Array(N);
@@ -787,6 +812,7 @@
     isBuildable: isBuildable, flatten: flatten, placeTrees: placeTrees, clearTreesAround: clearTreesAround,
     finalizeClasses: finalizeClasses, supported: supported, autoSpawns: autoSpawns, autoPools: autoPools, blockOK: blockOK, stats: stats,
     rasterizeOsm: rasterizeOsm, buildOverpassQuery: buildOverpassQuery, fillRings: fillRings, stitchRings: stitchRings,
+    landCoverMode: landCoverMode,
     buildTmx: buildTmx, bytesToB64: bytesToB64, u32ToBytes: u32ToBytes, NORM: NORM,
   };
 });
