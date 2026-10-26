@@ -5,6 +5,8 @@
 
   const Editor = {
     cv: null, st: null, cat: null, sets: {}, imgs: new Map(), mini: null,
+    // Visible textured chunks are rendered once and reused while panning/zooming.
+    chunkCache: new Map(),
     view: { cx: 0, cy: 0, s: 4 }, tool: 'pan', team: 0, hooks: {},
     hillshade: true, flatten: true,
   };
@@ -17,7 +19,7 @@
   };
 
   /** state: {W,H,cls,shade,treeCand,trees,elev,spawns,pools,seed} */
-  Editor.setState = function (state) { Editor.st = state; };
+  Editor.setState = function (state) { Editor.st = state; clearChunkCache(); };
   Editor.hasMap = () => !!Editor.st;
 
   /* ------------------------------------------------------------- tile images */
@@ -54,6 +56,7 @@
     const loaded = await Promise.all(ids.map(loadSet));
     Editor.sets = {};
     ids.forEach((id, i) => { Editor.sets[id] = loaded[i]; });
+    clearChunkCache();
     Editor.redraw();
     changed();
   };
@@ -110,6 +113,64 @@
     ctx.drawImage(set.canvas, sx, sy, e.tw, e.th, dx, dy, dw, dh);
   }
 
+  // Chunk size is expressed in map cells. The chunk canvas is intentionally
+  // lower-res than the source sprites; pixelated tiles fit Rusted Warfare and
+  // cap memory use on phones. Only visible chunks are built, and the LRU is
+  // capped so exploring a 1000x1000 map cannot retain the entire map in RAM.
+  const CHUNK_CELLS = 64;
+  const CHUNK_PIXELS = 8;
+  const MAX_CACHED_CHUNKS = 24;
+
+  function clearChunkCache() {
+    Editor.chunkCache.clear();
+  }
+
+  function invalidateCellChunk(x, y) {
+    Editor.chunkCache.delete(Math.floor(x / CHUNK_CELLS) + ',' + Math.floor(y / CHUNK_CELLS));
+  }
+
+  function getChunkCanvas(st, cx, cy) {
+    const key = cx + ',' + cy;
+    const cached = Editor.chunkCache.get(key);
+    if (cached) {
+      // Refresh insertion order so frequently used chunks survive LRU eviction.
+      Editor.chunkCache.delete(key);
+      Editor.chunkCache.set(key, cached);
+      return cached;
+    }
+
+    const x0 = cx * CHUNK_CELLS, y0 = cy * CHUNK_CELLS;
+    const x1 = Math.min(st.W, x0 + CHUNK_CELLS), y1 = Math.min(st.H, y0 + CHUNK_CELLS);
+    const width = (x1 - x0) * CHUNK_PIXELS, height = (y1 - y0) * CHUNK_PIXELS;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, width);
+    canvas.height = Math.max(1, height);
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = '#07090c';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    for (let y = y0; y < y1; y++) {
+      const dy = (y - y0) * CHUNK_PIXELS;
+      for (let x = x0; x < x1; x++) {
+        const dx = (x - x0) * CHUNK_PIXELS;
+        const g = st.ground[y * st.W + x];
+        drawTile(ctx, st.reg.ids[(g >>> 12) - 1], g & 4095, dx, dy, CHUNK_PIXELS, CHUNK_PIXELS);
+        const tree = st.trees[y * st.W + x];
+        if (tree) drawTile(ctx, 'misc', G.TREE_TILES[(tree - 1) % G.TREE_TILES.length],
+          dx, dy, CHUNK_PIXELS, CHUNK_PIXELS);
+      }
+    }
+
+    Editor.chunkCache.set(key, canvas);
+    while (Editor.chunkCache.size > MAX_CACHED_CHUNKS) {
+      const oldest = Editor.chunkCache.keys().next().value;
+      if (oldest === undefined) break;
+      Editor.chunkCache.delete(oldest);
+    }
+    return canvas;
+  }
+
   Editor.redraw = function () {
     if (!Editor.st || !Editor.st.ground) return;
     cancelAnimationFrame(Editor._raf);
@@ -128,20 +189,33 @@
     const y0 = Math.max(0, Math.floor(-oy / s)), y1 = Math.min(H, Math.ceil((cv.height - oy) / s));
     const tex = v.s >= 6;
     if (tex) {
-      for (let y = y0; y < y1; y++) {
-        const dy = Math.floor(oy + y * s), dh = Math.floor(oy + (y + 1) * s) - dy;
-        for (let x = x0; x < x1; x++) {
-          const g = st.ground[y * W + x], dx = Math.floor(ox + x * s), dw = Math.floor(ox + (x + 1) * s) - dx;
-          drawTile(ctx, st.reg.ids[(g >>> 12) - 1], g & 4095, dx, dy, dw, dh);
+      // Draw a few pre-rendered chunks instead of issuing one drawImage per
+      // map cell on every animation frame.
+      if (x1 > x0 && y1 > y0) {
+        const cx0 = Math.floor(x0 / CHUNK_CELLS), cx1 = Math.floor((x1 - 1) / CHUNK_CELLS);
+        const cy0 = Math.floor(y0 / CHUNK_CELLS), cy1 = Math.floor((y1 - 1) / CHUNK_CELLS);
+        for (let cy = cy0; cy <= cy1; cy++) {
+          const gy0 = cy * CHUNK_CELLS, gy1 = Math.min(H, gy0 + CHUNK_CELLS);
+          const dy = Math.floor(oy + gy0 * s), dh = Math.floor(oy + gy1 * s) - dy;
+          for (let cx = cx0; cx <= cx1; cx++) {
+            const gx0 = cx * CHUNK_CELLS, gx1 = Math.min(W, gx0 + CHUNK_CELLS);
+            const dx = Math.floor(ox + gx0 * s), dw = Math.floor(ox + gx1 * s) - dx;
+            ctx.drawImage(getChunkCanvas(st, cx, cy), dx, dy, dw, dh);
+          }
         }
       }
-    } else ctx.drawImage(Editor.mini, 0, 0, W, H, ox, oy, W * s, H * s);
-
-    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
-      const t = st.trees[y * W + x]; if (!t) continue;
-      const dx = ox + x * s, dy = oy + y * s;
-      if (tex) drawTile(ctx, 'misc', G.TREE_TILES[(t - 1) % G.TREE_TILES.length], Math.floor(dx), Math.floor(dy), Math.ceil(s), Math.ceil(s));
-      else if (s >= 2) { ctx.fillStyle = '#17420f'; ctx.fillRect(dx, dy, Math.ceil(s * 0.8), Math.ceil(s * 0.8)); }
+    } else {
+      ctx.drawImage(Editor.mini, 0, 0, W, H, ox, oy, W * s, H * s);
+      // At overview scales individual trees are sub-pixel; avoid scanning up to
+      // one million cells for markers that cannot be seen.
+      if (v.s >= 2) {
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+          if (!st.trees[y * W + x]) continue;
+          const dx = ox + x * s, dy = oy + y * s;
+          ctx.fillStyle = '#17420f';
+          ctx.fillRect(dx, dy, Math.ceil(s * 0.8), Math.ceil(s * 0.8));
+        }
+      }
     }
     st.pools.forEach((p) => {
       const dx = ox + (p.x - 1) * s, dy = oy + (p.y - 1) * s;
@@ -239,18 +313,23 @@
       else if (G.blockOK(st, x, y)) {
         st.pools = st.pools.filter((p) => Math.abs(p.x - x) > 2 || Math.abs(p.y - y) > 2);
         st.pools.push({ x: x, y: y });
-        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) st.trees[(y + dy) * W + x + dx] = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          st.trees[(y + dy) * W + x + dx] = 0;
+          invalidateCellChunk(x + dx, y + dy);
+        }
       } else toast('A resource needs a 3 by 3 buildable area.', 'err');
       Editor.redraw(); changed();
     } else if (tool === 'tree') {
       if (st.trees[i]) st.trees[i] = 0;
       else if (G.BUILDABLE[st.cls[i]] && st.cls[i] !== C.SAND) st.trees[i] = 1 + Math.floor(Math.random() * G.TREE_TILES.length);
+      invalidateCellChunk(x, y);
       Editor.redraw(); changed();
     } else if (tool === 'erase') {
       const near = (p, r) => Math.abs(p.x - x) <= r && Math.abs(p.y - y) <= r;
       st.spawns = st.spawns.filter((p) => !near(p, 2));
       st.pools = st.pools.filter((p) => !near(p, 2));
       st.trees[i] = 0;
+      invalidateCellChunk(x, y);
       Editor.redraw(); changed();
     }
   }
