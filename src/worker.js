@@ -281,6 +281,40 @@ function int(url, name, min, max) {
   return v;
 }
 
+function isValidElevationPng(bytes) {
+  try {
+    if (bytes.length < 45 ||
+        bytes[0] !== 0x89 || bytes[1] !== 0x50 || bytes[2] !== 0x4e || bytes[3] !== 0x47 ||
+        bytes[4] !== 0x0d || bytes[5] !== 0x0a || bytes[6] !== 0x1a || bytes[7] !== 0x0a) return false;
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let pos = 8, hasHeader = false, hasData = false, dataClosed = false;
+    while (pos + 12 <= bytes.length) {
+      const len = dv.getUint32(pos, false);
+      if (len > bytes.length - pos - 12) return false;
+      const type = String.fromCharCode(bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]);
+      const crc = dv.getUint32(pos + 8 + len, false);
+      if (crc32(bytes.subarray(pos + 4, pos + 8 + len)) !== crc) return false;
+      if (!hasHeader && (type !== 'IHDR' || pos !== 8 || len !== 13)) return false;
+      if (type === 'IHDR') {
+        if (hasHeader || pos !== 8 || len !== 13) return false;
+        if (dv.getUint32(pos + 8, false) !== 256 || dv.getUint32(pos + 12, false) !== 256 ||
+            bytes[pos + 16] !== 8 || (bytes[pos + 17] !== 2 && bytes[pos + 17] !== 6) ||
+            bytes[pos + 18] !== 0 || bytes[pos + 19] !== 0 || bytes[pos + 20] !== 0) return false;
+        hasHeader = true;
+      } else if (type === 'IDAT') {
+        if (dataClosed) return false;
+        hasData = true;
+      } else if (type === 'IEND') {
+        return len === 0 && hasHeader && hasData && pos + 12 === bytes.length;
+      } else if (hasData) {
+        dataClosed = true;
+      }
+      pos += 12 + len;
+    }
+  } catch (_) { /* malformed PNG */ }
+  return false;
+}
+
 async function fetchTile(z, x, y) {
   for (const host of DEM_HOSTS) {
     try {
@@ -290,13 +324,10 @@ async function fetchTile(z, x, y) {
       });
       if (!r.ok) continue;
       const bytes = new Uint8Array(await r.arrayBuffer());
-      // Some upstream failures can arrive as HTTP 200 bodies. Never cache or
-      // return them as if they were real elevation PNGs.
-      if (bytes.length < 33 ||
-          bytes[0] !== 0x89 || bytes[1] !== 0x50 || bytes[2] !== 0x4e || bytes[3] !== 0x47 ||
-          bytes[4] !== 0x0d || bytes[5] !== 0x0a || bytes[6] !== 0x1a || bytes[7] !== 0x0a) continue;
-      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-      if (dv.getUint32(16, false) !== 256 || dv.getUint32(20, false) !== 256) continue;
+      // Reject structurally incomplete PNGs and any chunk whose CRC does not
+      // match. A damaged but decodable tile can otherwise become a permanent
+      // flat/striped patch in an otherwise successful map.
+      if (!isValidElevationPng(bytes)) continue;
       return bytes;
     } catch (_) { /* try the next host */ }
   }
