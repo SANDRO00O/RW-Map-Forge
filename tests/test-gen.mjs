@@ -31,14 +31,16 @@ assert.equal(G.landCoverMode(new Uint8Array(9)), 0,
   assert.ok(Array.from(classification.cls).every(cls => cls !== G.C.SHALLOW),
     'coarse MODIS water labels must not create square water patches on positive-elevation land');
   const vectorWater = new Uint8Array(width * height);
-  vectorWater[4 * width + 4] = 1;
+  for (let y = 1; y <= 7; y++) for (let x = 1; x <= 7; x++) {
+    vectorWater[y * width + x] = 1;
+  }
   const withVectorWater = G.classify({
     W: width, H: height, mpt: 100, lat: 0,
     elev: new Float32Array(width * height).fill(100),
     water: vectorWater,
   }, { seaLevel: 0, smooth: 0, mountPct: 0, stonePct: 0, base: 'grass', beach: false });
   assert.equal(withVectorWater.cls[4 * width + 4], G.C.SHALLOW,
-    'explicit water geometry must still be respected');
+    'a real multi-cell water geometry must still be respected');
 }
 const zlib = require('zlib');
 const fs = require('fs');
