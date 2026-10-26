@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
-import { gzipSync, gunzipSync } from 'node:zlib';
+import { deflateSync, gzipSync, gunzipSync } from 'node:zlib';
 
 if (!globalThis.crypto) Object.defineProperty(globalThis, 'crypto', { value: webcrypto });
 
@@ -46,6 +46,41 @@ async function callFeatures(source, ctx, env = {}) {
 }
 function ctxWithWaitUntil(pending = []) {
   return { pending, waitUntil(p) { this.pending.push(p); } };
+}
+
+function pngCrc32(bytes) {
+  let c = 0xffffffff;
+  for (const byte of bytes) {
+    c ^= byte;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+function pngChunk(type, data) {
+  const typeBytes = Buffer.from(type, 'ascii');
+  const length = Buffer.alloc(4); length.writeUInt32BE(data.length);
+  const crc = Buffer.alloc(4); crc.writeUInt32BE(pngCrc32(Buffer.concat([typeBytes, data])));
+  return Buffer.concat([length, typeBytes, data, crc]);
+}
+function makeTestPng() {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(256, 0); ihdr.writeUInt32BE(256, 4);
+  ihdr[8] = 8; ihdr[9] = 2; // 8-bit RGB
+  const raw = Buffer.alloc(256 * (1 + 256 * 3)); // each row uses PNG filter 0
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+function damagePngChunkCrc(png, type) {
+  const out = Buffer.from(png);
+  const typePos = out.indexOf(Buffer.from(type, 'ascii'));
+  assert.ok(typePos >= 4, 'PNG chunk should be present');
+  const dataLength = out.readUInt32BE(typePos - 4);
+  out[typePos + 4 + dataLength] ^= 0x01;
+  return out;
 }
 const fakeFeatureCollection = {
   features: [{
@@ -195,12 +230,7 @@ const fakeFeatureCollection = {
     if (url.pathname.endsWith('/1/1/0.png')) {
       return new Response('missing', { status: 404 });
     }
-    const png = new Uint8Array(33);
-    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
-    png.set([0x49, 0x48, 0x44, 0x52], 12); // IHDR
-    new DataView(png.buffer).setUint32(16, 256, false);
-    new DataView(png.buffer).setUint32(20, 256, false);
-    return new Response(png, { status: 200, headers: { 'content-type': 'image/png' } });
+    return new Response(makeTestPng(), { status: 200, headers: { 'content-type': 'image/png' } });
   };
   const url = 'https://rw-map-forge.pages.dev/api/dem?z=1&x0=0&x1=1&y0=0&y1=0';
   const res = await handleApiRequest(new Request(url), ctxWithWaitUntil());
@@ -210,6 +240,40 @@ const fakeFeatureCollection = {
   assert.equal(res.headers.get('cache-control'), 'no-store');
   assert.equal(edgeStored.has(url), false, 'partial DEM batches must not enter the edge cache');
   assert.ok(requests >= 3, 'missing primary-host tile should try the second configured host');
+}
+
+{
+  // A PNG with a bad IDAT CRC must be rejected so the second upstream host can
+  // supply the intact elevation tile before a complete DEM batch is cached.
+  edgeStored.clear();
+  const validPng = makeTestPng();
+  const damagedPng = damagePngChunkCrc(validPng, 'IDAT');
+  let primaryCalls = 0, fallbackCalls = 0;
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === 's3.amazonaws.com') {
+      primaryCalls++;
+      return new Response(damagedPng, { status: 200, headers: { 'content-type': 'image/png' } });
+    }
+    if (url.hostname === 'elevation-tiles-prod.s3.amazonaws.com') {
+      fallbackCalls++;
+      return new Response(validPng, { status: 200, headers: { 'content-type': 'image/png' } });
+    }
+    throw new Error('Unexpected DEM host: ' + url.hostname);
+  };
+  const url = 'https://rw-map-forge.pages.dev/api/dem?v=png-crc-test&z=1&x0=0&x1=0&y0=0&y1=0';
+  const ctx = ctxWithWaitUntil();
+  const response = await handleApiRequest(new Request(url), ctx);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('x-tiles-present'), '1');
+  assert.equal(response.headers.get('x-tiles-total'), '1');
+  assert.equal(primaryCalls, 1, 'primary PNG with bad CRC should be rejected');
+  assert.equal(fallbackCalls, 1, 'valid PNG should be fetched from fallback host');
+  await Promise.all(ctx.pending.splice(0));
+  const cached = await handleApiRequest(new Request(url), ctxWithWaitUntil());
+  assert.equal(cached.status, 200);
+  assert.equal(primaryCalls, 1, 'only a validated DEM batch should be cached');
+  assert.equal(fallbackCalls, 1);
 }
 
 {
