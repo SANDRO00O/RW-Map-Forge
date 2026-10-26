@@ -482,13 +482,13 @@ async function sampleLandCover(geo, W, H) {
   })));
   const tiles = new Map(entries.map((entry) => [entry.key, entry.data]));
   const mask = new Uint8Array(W * H);
+  const totalCols = 360 / LAND_TILE_RES;
+  const totalRows = 180 / LAND_TILE_RES;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const geoPos = mercatorCellToGeo(geo, x, y);
       const lon = geoPos.lon, lat = geoPos.lat;
       if (lat < -90 || lat > 90) continue;
-      const totalCols = 360 / LAND_TILE_RES;
-      const totalRows = 180 / LAND_TILE_RES;
       const centerCol = Math.min(totalCols - 1, Math.max(0, Math.floor((normalizeLongitude(lon) + 180) / LAND_TILE_RES)));
       const centerRow = Math.min(totalRows - 1, Math.max(0, Math.floor((90 - lat) / LAND_TILE_RES)));
       const neighborhood = [];
