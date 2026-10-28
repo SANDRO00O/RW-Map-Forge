@@ -1,7 +1,7 @@
 /* RW Map Forge - generation pipeline (Web Worker).
  * Keeps the UI responsive: downloads elevation + OSM data, classifies terrain and builds the TMX file off the main thread. */
 'use strict';
-importScripts('/js/gen.js?v=water-only-20261028-1', '/js/arcgis.js?v=vector-axis-normalization-20261026-1');
+importScripts('/js/gen.js?v=root-ocean-mask-20261028-1', '/js/arcgis.js?v=root-ocean-mask-20261028-1');
 const G = self.RWGen;
 const A = self.RWArcGIS;
 
@@ -512,7 +512,7 @@ async function sampleLandCover(geo, W, H) {
   return mask;
 }
 
-async function loadSelfHostedOsm(geo, o) {
+async function loadSelfHostedOsm(geo, o, status) {
   const bbox = geo.bbox();
   progress('osm', 'Clipping bounds: lat ' + bbox.s.toFixed(5) + '..' + bbox.n.toFixed(5) +
     ', lon ' + bbox.w.toFixed(5) + '..' + bbox.e.toFixed(5), 0.245);
@@ -523,6 +523,10 @@ async function loadSelfHostedOsm(geo, o) {
     sources.push({ source: 'rivers', label: 'major rivers', kind: 'rivers' });
   }
   if (o.roads) sources.push({ source: 'roads', label: 'major roads', kind: 'roads' });
+  // The global land mask is mandatory coastline context, not an optional overlay.
+  if (status && status.oceanMaskReady === true) {
+    sources.push({ source: 'landmask', label: 'global coastline land mask', kind: 'landmask' });
+  }
 
   const settled = await Promise.all(sources.map(async (s) => {
     try {
@@ -545,16 +549,18 @@ async function loadSelfHostedOsm(geo, o) {
       if (result.features.length && !converted.length) {
         progress('osm', 'No ' + s.label + ' geometries intersected the clipping bounds; source records cover the larger R2 tile, not only this map.', 0.43);
       }
-      return { success: true, label: s.label, elements: converted };
+      return { success: true, source: s.source, label: s.label, elements: converted };
     } catch (err) {
-      return { success: false, label: s.label, error: err.message || String(err) };
+      return { success: false, source: s.source, label: s.label, error: err.message || String(err) };
     }
   }));
 
+  let landMaskAvailable = false;
   for (const item of settled) {
     if (item.success) {
       elements = elements.concat(item.elements);
       successes++;
+      if (item.source === 'landmask') landMaskAvailable = true;
     } else {
       progress('osm', 'Skipped local ' + item.label + ': ' + item.error, 0.44);
     }
@@ -571,7 +577,7 @@ async function loadSelfHostedOsm(geo, o) {
     }
   }
 
-  return successes ? { elements: elements, landCoverMask: landCoverMask } : null;
+  return successes ? { elements: elements, landCoverMask: landCoverMask, landMaskAvailable: landMaskAvailable } : null;
 }
 
 async function loadOsm(geo, o) {
@@ -580,7 +586,7 @@ async function loadOsm(geo, o) {
   try {
     const statusRes = await fetch('/api/terrain-status');
     const status = await statusRes.json();
-    if (status && status.ready === true) return await loadSelfHostedOsm(geo, o);
+    if (status && status.ready === true) return await loadSelfHostedOsm(geo, o, status);
     progress('osm', 'Global R2 dataset is not ready yet; using the existing online fallback', 0.24);
   } catch (_) {
     progress('osm', 'Global R2 dataset status unavailable; using the existing online fallback', 0.24);
@@ -605,23 +611,30 @@ async function generate(p) {
   }
   progress('elevation', 'Elevation range ' + Math.round(emin) + ' to ' + Math.round(emax) + ' m', 0.22);
 
-  let ras = { water: null, land: null, road: null };
-  if (p.osm.water || p.osm.land || p.osm.roads) {
-    const json = await loadOsm(geo, p.osm);
-    if (json) {
-      progress('osm', 'Rasterizing ' + json.elements.length + ' map features', 0.55);
-      ras = G.rasterizeOsm({ elements: json.elements }, geo, W, H, p.osm);
-      if (json.landCoverMask) {
-        for (let i = 0; i < json.landCoverMask.length; i++) {
-          if (json.landCoverMask[i] !== 0) ras.land[i] = json.landCoverMask[i];
-        }
+  let ras = { water: null, land: null, road: null, landMask: null };
+  // Always check the global coastline layer, even when optional overlays are off.
+  const terrainData = await loadOsm(geo, p.osm);
+  if (terrainData) {
+    progress('osm', 'Rasterizing ' + terrainData.elements.length + ' map features', 0.55);
+    ras = G.rasterizeOsm({ elements: terrainData.elements }, geo, W, H, p.osm);
+    if (terrainData.landCoverMask) {
+      for (let i = 0; i < terrainData.landCoverMask.length; i++) {
+        if (terrainData.landCoverMask[i] !== 0) ras.land[i] = terrainData.landCoverMask[i];
       }
-    } else progress('osm', 'No external map-feature data; using elevation only', 0.55);
-  } else progress('osm', 'External map-feature data disabled', 0.55);
+    }
+  } else progress('osm', 'No external map-feature data; using raw elevation as the water fallback', 0.55);
 
   progress('terrain', 'Classifying terrain', 0.65);
-  const r = G.classify({ W: W, H: H, mpt: mpt, lat: p.lat, elev: elev, water: ras.water, land: ras.land, road: ras.road }, p.terrain);
-  const st = { W: W, H: H, cls: r.cls, treeCand: r.treeCand, spawns: [], pools: [], seed: p.seed };
+  const r = G.classify({
+    W: W, H: H, mpt: mpt, lat: p.lat, elev: elev,
+    water: ras.water, land: ras.land, road: ras.road,
+    landMask: ras.landMask, landMaskAvailable: !!(terrainData && terrainData.landMaskAvailable),
+  }, p.terrain);
+  const ws = r.waterStats;
+  progress('terrain', 'Water mask: ' + ws.totalCells + ' cells total; DEM ' + ws.demCells +
+    ', coastline mask ' + ws.oceanMaskCells + ', mapped water ' + ws.featureCells +
+    (ws.landMaskAvailable ? ' (global coastline mask active)' : ' (DEM fallback)'), 0.69);
+  const st = { W: W, H: H, cls: r.cls, waterMask: r.waterMask, treeCand: r.treeCand, spawns: [], pools: [], seed: p.seed };
   progress('terrain', 'Placing vegetation', 0.8);
   G.placeTrees(st, p.treeDensity, p.seed);
   if (p.autoPlace) {
@@ -632,9 +645,9 @@ async function generate(p) {
   }
   progress('done', 'Done', 1);
   post('result', {
-    W: W, H: H, cls: st.cls, shade: r.shade, treeCand: r.treeCand, trees: st.trees, elev: elev,
-    spawns: st.spawns, pools: st.pools, thresholds: r.thresholds, seed: p.seed,
-  }, [st.cls.buffer, r.shade.buffer, r.treeCand.buffer, st.trees.buffer, elev.buffer]);
+    W: W, H: H, cls: st.cls, waterMask: st.waterMask, shade: r.shade, treeCand: r.treeCand, trees: st.trees, elev: elev,
+    spawns: st.spawns, pools: st.pools, waterStats: r.waterStats, thresholds: r.thresholds, seed: p.seed,
+  }, [st.cls.buffer, st.waterMask.buffer, r.shade.buffer, r.treeCand.buffer, st.trees.buffer, elev.buffer]);
 }
 
 /* ------------------------------------------------------------------ Export */
