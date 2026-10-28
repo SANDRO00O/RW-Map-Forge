@@ -35,6 +35,29 @@ for (const outside of [G.C.SAND, G.C.GRASS, G.C.MOUNTAIN]) {
 }
 
 
+// Negative-elevation sea must survive coastline cleanup even when the surrounding land is Dirt.
+{
+  const width = 24, height = 16;
+  const elev = new Float32Array(width * height).fill(120);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < 9; x++) elev[y * width + x] = -12;
+  }
+  const classification = G.classify({
+    W: width, H: height, mpt: 200, lat: 54, elev,
+  }, {
+    seaLevel: 0, smooth: 0, mountPct: 0, stonePct: 0,
+    base: 'dirt', beach: false,
+  });
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < 9; x++) {
+      assert.equal(classification.cls[y * width + x], G.C.WATER,
+        'negative-elevation sea cells must remain Water after terrain finalization');
+    }
+    assert.equal(classification.cls[y * width + 9], G.C.SAND,
+      'the incompatible Dirt coast should become Sand, not convert sea to Dirt');
+  }
+}
+
 // Coarse categorical land-cover samples should not preserve isolated one-cell noise.
 assert.equal(G.landCoverMode([5, 5, 5, 5, 2, 5, 5, 5, 5]), 5,
   'an isolated barren cell should follow the surrounding land-cover majority');
