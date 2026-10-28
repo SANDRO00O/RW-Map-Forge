@@ -171,12 +171,13 @@ const fakeFeatureCollection = {
   r2Stored.clear();
   const manifest = {
     ready: true,
-    datasetVersion: 'global-v1',
+    datasetVersion: 'global-v1.1-ocean-mask',
     generatedAt: '2026-01-01T00:00:00Z',
     statusMessage: 'ready',
     rivers: { nonEmptyCells: 123 },
     water: { nonEmptyCells: 456 },
     roads: { nonEmptyCells: 78 },
+    landmask: { nonEmptyCells: 90 },
     landcover: { tiles: 648 },
   };
   r2Stored.set('global/v1/manifest.json', JSON.stringify(manifest));
@@ -189,6 +190,15 @@ const fakeFeatureCollection = {
     }],
   };
   r2Stored.set('global/v1/hydro/rivers/22_45.geojson.gz', gzipSync(Buffer.from(JSON.stringify(collection))));
+  const landMaskCollection = {
+    type: 'FeatureCollection',
+    features: [{
+      type: 'Feature',
+      properties: { NE_ID: 101 },
+      geometry: { type: 'Polygon', coordinates: [[[47.5, 30.4], [47.6, 30.4], [47.6, 30.5], [47.5, 30.5], [47.5, 30.4]]] },
+    }],
+  };
+  r2Stored.set('global/v1/hydro/landmask/22_45.geojson.gz', gzipSync(Buffer.from(JSON.stringify(landMaskCollection))));
   const landValues = Buffer.alloc(400 * 400, 5);
   r2Stored.set('global/v1/landcover/3_2.bin.gz', gzipSync(landValues));
 
@@ -198,6 +208,8 @@ const fakeFeatureCollection = {
   const status = await statusRes.json();
   assert.equal(status.ready, true);
   assert.equal(status.tileCounts.rivers, 123);
+  assert.equal(status.oceanMaskReady, true, 'the API should advertise a valid global ocean mask');
+  assert.equal(status.tileCounts.landmask, 90);
   await Promise.all(ctx.pending);
 
   const hydroRes = await handleApiRequest(new Request('https://rw-map-forge.pages.dev/api/hydro-tile?source=rivers&x=45&y=22'), ctxWithWaitUntil(), { TERRAIN_CACHE: r2 });
@@ -205,6 +217,12 @@ const fakeFeatureCollection = {
   assert.equal(hydroRes.headers.get('content-type'), 'application/gzip');
   const decodedHydro = JSON.parse(gunzipSync(Buffer.from(await hydroRes.arrayBuffer())).toString('utf8'));
   assert.equal(decodedHydro.features[0].properties.HYRIV_ID, 42);
+
+  const landMaskRes = await handleApiRequest(new Request('https://rw-map-forge.pages.dev/api/hydro-tile?source=landmask&x=45&y=22'), ctxWithWaitUntil(), { TERRAIN_CACHE: r2 });
+  assert.equal(landMaskRes.status, 200);
+  const decodedLandMask = JSON.parse(gunzipSync(Buffer.from(await landMaskRes.arrayBuffer())).toString('utf8'));
+  assert.equal(decodedLandMask.features[0].properties.NE_ID, 101,
+    'the API must serve land polygons through the global hydro tile endpoint');
 
   const emptyRes = await handleApiRequest(new Request('https://rw-map-forge.pages.dev/api/hydro-tile?source=water&x=46&y=22'), ctxWithWaitUntil(), { TERRAIN_CACHE: r2 });
   assert.equal(emptyRes.status, 200);
