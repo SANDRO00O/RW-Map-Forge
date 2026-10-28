@@ -196,11 +196,15 @@ async function handleGlobalTerrainStatus(ctx, env) {
     generatedAt: manifest.generatedAt || null,
     statusMessage: manifest.statusMessage || manifest.error || null,
     sources: manifest.sources || null,
+    // Old manifests remain usable as a fallback, but never claim an ocean mask
+    // until the Natural Earth land polygons have been imported successfully.
+    oceanMaskReady: !!(manifest.landmask && Number(manifest.landmask.nonEmptyCells) > 0),
     tileCounts: {
       rivers: manifest.rivers && manifest.rivers.nonEmptyCells,
       water: manifest.water && manifest.water.nonEmptyCells,
       roads: manifest.roads && manifest.roads.nonEmptyCells,
       landcover: manifest.landcover && manifest.landcover.tiles,
+      landmask: manifest.landmask && manifest.landmask.nonEmptyCells,
     },
   }, manifest.ready === true ? 200 : 503);
 }
@@ -223,7 +227,7 @@ async function handleGlobalTerrainTile(url, ctx, env, kind) {
   try {
     if (kind === 'hydro') {
       source = url.searchParams.get('source');
-      if (!['water', 'rivers', 'roads'].includes(source)) return json({ error: 'Invalid hydro tile source' }, 400);
+      if (!['water', 'rivers', 'roads', 'landmask'].includes(source)) return json({ error: 'Invalid hydro tile source' }, 400);
       const degrees = source === 'roads' ? 10 : 4;
       maxX = 360 / degrees - 1;
       maxY = 180 / degrees - 1;
