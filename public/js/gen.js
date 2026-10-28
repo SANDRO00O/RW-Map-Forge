@@ -575,6 +575,7 @@
     const cx = W / 2, cy = H / 2, rad = Math.min(W, H) * (n === 2 ? 0.36 : 0.38);
     const off = rnd() * Math.PI * 2, out = [];
     const used = [];
+    const farEnough = (x, y) => used.every(([ux, uy]) => (x - ux) ** 2 + (y - uy) ** 2 >= 12 * 12);
     for (let k = 0; k < n; k++) {
       const a = off + (2 * Math.PI * k) / n;
       const tx = Math.round(cx + Math.cos(a) * rad), ty = Math.round(cy + Math.sin(a) * rad);
@@ -583,11 +584,25 @@
       for (let dy = -R; dy <= R; dy += 2) for (let dx = -R; dx <= R; dx += 2) {
         const x = tx + dx, y = ty + dy;
         if (x < 8 || y < 8 || x >= W - 8 || y >= H - 8) continue;
-        if (!isBuildable(st.cls, W, H, x, y, 5)) continue;
-        const d = dx * dx + dy * dy; if (d < bd) { bd = d; best = [x, y]; }
+        if (!farEnough(x, y) || !isBuildable(st.cls, W, H, x, y, 5)) continue;
+        const d = dx * dx + dy * dy;
+        if (d < bd) { bd = d; best = [x, y]; }
       }
-      let x, y, fl = false;
-      if (best) { x = best[0]; y = best[1]; } else { x = clamp(tx, 8, W - 9); y = clamp(ty, 8, H - 9); fl = true; }
+      let fl = false;
+      if (!best) {
+        // Search the rest of the map for legal land. The previous fallback placed
+        // a command center in ocean/rock and flattened an arbitrary patch into Dirt.
+        let fallbackDistance = Infinity;
+        for (let y = 8; y < H - 8; y += 2) for (let x = 8; x < W - 8; x += 2) {
+          if (!farEnough(x, y) || !isBuildable(st.cls, W, H, x, y, 5)) continue;
+          const d = (x - tx) ** 2 + (y - ty) ** 2;
+          if (d < fallbackDistance) { fallbackDistance = d; best = [x, y]; }
+        }
+        fl = !!best;
+      }
+      // If the map has no safe buildable area, omit this spawn instead of inventing land.
+      if (!best) continue;
+      const x = best[0], y = best[1];
       used.push([x, y, fl]);
       out.push({ x: x, y: y, team: k, flat: fl });
     }
