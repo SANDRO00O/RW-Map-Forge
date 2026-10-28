@@ -397,7 +397,7 @@
         w.terminate(); generating = null; $('btnGenerate').disabled = false;
         try {
           Progress.update('done', 'Building preview', 1);
-          Editor.setState({ W: m.W, H: m.H, cls: m.cls, shade: m.shade, treeCand: m.treeCand, trees: m.trees, elev: m.elev, spawns: m.spawns, pools: m.pools, seed: m.seed });
+          Editor.setState({ W: m.W, H: m.H, cls: m.cls, waterMask: m.waterMask, shade: m.shade, treeCand: m.treeCand, trees: m.trees, elev: m.elev, spawns: m.spawns, pools: m.pools, seed: m.seed });
           await Editor.retile();
           hasMap = true;
           $('steps').querySelector('[data-view=editor]').disabled = false;
