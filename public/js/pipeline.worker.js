@@ -1,7 +1,7 @@
 /* RW Map Forge - generation pipeline (Web Worker).
  * Keeps the UI responsive: downloads elevation + OSM data, classifies terrain and builds the TMX file off the main thread. */
 'use strict';
-importScripts('/js/gen.js?v=landcover-cell-smoothing-20261026-1', '/js/arcgis.js?v=vector-axis-normalization-20261026-1');
+importScripts('/js/gen.js?v=urban-landcover-confidence-20261028-1', '/js/arcgis.js?v=vector-axis-normalization-20261026-1');
 const G = self.RWGen;
 const A = self.RWArcGIS;
 
