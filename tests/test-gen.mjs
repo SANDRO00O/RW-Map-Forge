@@ -115,6 +115,14 @@ for (const outside of [G.C.SAND, G.C.GRASS, G.C.MOUNTAIN]) {
   }
 }
 
+// Automatic player placement must never invent a land base in an all-water map.
+{
+  const width = 32, height = 32;
+  const st = { W: width, H: height, cls: new Uint8Array(width * height).fill(G.C.WATER) };
+  assert.equal(G.autoSpawns(st, 2, 17).length, 0,
+    'when no legal base exists, player placement must skip it rather than flatten ocean into land');
+}
+
 // Coarse categorical land-cover samples should not preserve isolated one-cell noise.
 assert.equal(G.landCoverMode([5, 5, 5, 5, 2, 5, 5, 5, 5]), 5,
   'an isolated barren cell should follow the surrounding land-cover majority');
