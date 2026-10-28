@@ -8,22 +8,23 @@
   // ------------------------------------------------------------ classes ---
   const C = { DEEP: 0, WATER: 1, SHALLOW: 2, SAND: 3, DIRT: 4, GRASS: 5, STONE: 6, MOUNTAIN: 7, SNOW: 8 };
   const NCLS = 9;
-  const CLS_NAMES = ['Water', 'Water', 'Water', 'Sand', 'Dirt', 'Grass', 'Stone', 'Mountain', 'Snow'];
+  const CLS_NAMES = ['Water', 'Water', 'Shallow Water', 'Sand', 'Dirt', 'Grass', 'Stone', 'Mountain', 'Snow'];
   const CLS_COLORS = ['#0a2f66', '#1b5fb5', '#3b86d8', '#d8bd8a', '#8a5a3a', '#3f7d2e', '#7b7b7b', '#8c6d57', '#eef3f8'];
   const TEAM_COLORS = ['#e53935', '#1e88e5', '#43a047', '#fdd835', '#8e24aa', '#fb8c00', '#00acc1', '#6d4c41', '#ec407a', '#9e9e9e'];
 
-  // Use the regular Water tileset for every generated water cell.
+  // Open water uses Water; cells near a shoreline use Shallow Water.
   const BASE_SETS = [
-    ['water', [0]], ['water', [0]], ['water', [0]],
+    ['water', [0]], ['water', [0]], ['shallowwater', [0]],
     ['sand', [0]], ['dirt', [0]], ['longgrass', [0]], ['mountain', [0]], ['mountain', [0]], ['snow', [0]],
   ];
 
   // [outside, inside, transition image]: the 'inside' cell is the one that receives the edge tile.
   // Only _flat sets with the 3x7 layout (ring 0-8 + inner corners 12/14/18/20); this layout is confirmed by a working map.
   const RIM_DEF = [
-    [C.SAND, C.WATER, 'sand2shallowwater_flat'],
-    [C.GRASS, C.WATER, 'longgrass2shallowwater_flat'],
-    [C.MOUNTAIN, C.WATER, 'mountain2shallowwater_flat'],
+    [C.SAND, C.SHALLOW, 'sand2shallowwater_flat'],
+    [C.GRASS, C.SHALLOW, 'longgrass2shallowwater_flat'],
+    [C.MOUNTAIN, C.SHALLOW, 'mountain2shallowwater_flat'],
+    [C.SHALLOW, C.WATER, 'shallowwater2water_flat'],
     [C.SAND, C.GRASS, 'sand2longgrass_flat'],
     [C.SAND, C.DIRT, 'sand2dirt_flat'],
     [C.GRASS, C.DIRT, 'longgrass2dirt_flat'],
@@ -50,7 +51,7 @@
     seaLevel: 0, smooth: 1,
     mountPct: 12, stonePct: 8, minSlope: 0.12,
     base: 'auto', snowShift: 0, beach: true, beachW: 2,
-    urbanDirt: true, roads: false, treeDensity: 0.45, seed: 1,
+    urbanDirt: true, roads: false, treeDensity: 0.45, shallowW: 2, seed: 1,
   };
 
   // ------------------------------------------------------------ helpers ---
@@ -318,27 +319,30 @@
     if (p.base === 'dirt') base = C.DIRT; else if (p.base === 'sand') base = C.SAND; else if (p.base === 'snow') base = C.SNOW;
     else if (p.base === 'auto' && Math.abs(lat) > 66) base = C.SNOW;
     const sl = snowline(lat, p.snowShift), alpine = sl > 800 ? sl * 0.75 : 1e9;
-    const dLand = p.beach ? chamfer(water, W, H) : null; // for land cells: distance to water
+    const dLand = p.beach ? chamfer(water, W, H) : null; // land-cell distance to water for beaches
+    const dToLand = p.shallowW > 0 ? chamfer(land, W, H) : null; // water-cell distance to the nearest land
     const treeCand = new Uint8Array(N);
 
     for (let i = 0; i < N; i++) {
       if (water[i]) {
-        // All generated water uses the regular Water tileset; no shallow/deep zones.
-        cls[i] = C.WATER;
+        // Keep the water interior as Water and make a two-tile coastal band Shallow Water.
+        // This lets the original shallowwater2water_flat edge set create a real transition.
+        const distanceToLand = dToLand ? dToLand[i] / 3 : Infinity;
+        cls[i] = distanceToLand <= p.shallowW ? C.SHALLOW : C.WATER;
         continue;
       }
       let c = base; const el = e[i];
       if (el > sl) c = C.SNOW; else if (el > alpine && c === C.GRASS) c = C.DIRT;
       const lc = osmLand ? osmLand[i] : 0;
       if (lc === 1) { treeCand[i] = 1; if (c !== C.SNOW && c !== C.SAND) c = C.GRASS; }
-      else if (lc === 2) c = C.SAND;
-      else if (lc === 3) c = C.DIRT;
+      else if (lc === 2) { if (c !== C.SNOW) c = C.SAND; }
+      else if (lc === 3) { if (c !== C.SNOW) c = C.DIRT; }
       else if (lc === 4) { if (p.urbanDirt && c !== C.SNOW) c = C.DIRT; }
       else if (lc === 5) { if (c !== C.SNOW) c = C.GRASS; }
       else if (lc === 6) c = C.SNOW;
       if (sMask[i] && c !== C.SNOW && c !== C.SAND) c = C.DIRT;
       if (dLand && dLand[i] / 3 <= p.beachW && el < 25 && c !== C.SNOW) c = C.SAND;
-      if (osmRoad && osmRoad[i] && p.roads) c = C.DIRT;
+      if (osmRoad && osmRoad[i] && p.roads && c !== C.SNOW) c = C.DIRT;
       if (mMask[i]) c = C.MOUNTAIN;
       cls[i] = c;
     }
@@ -368,67 +372,84 @@
   // Removes adjacencies that have no original transition tileset (snow next to grass/sand/water, water next to land, ...)
   // by inserting a two-cell dirt belt between snow and whatever it cannot connect to.
   function fixUnsupported(cls, W, H, waterMask) {
-    let changed = 0; const bad = new Uint8Array(W * H);
+    let changed = 0;
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = y * W + x;
-      // Never let visual transition repair overwrite source-classified water.
+      const c = cls[i];
+
+      // Keep every source-water cell wet, while allowing the coastal subset to stay Shallow Water.
       if (waterMask && waterMask[i]) {
-        if (cls[i] !== C.WATER) { cls[i] = C.WATER; changed++; }
+        if (c !== C.WATER && c !== C.SHALLOW) { cls[i] = C.WATER; changed++; }
         continue;
       }
-      const c = cls[i];
-      if (c === C.WATER) continue;
+      if (c === C.WATER || c === C.SHALLOW) continue;
 
-      // Coastline repair changes the land-side class only.
-      let unsupportedWaterNeighbor = false;
-      for (let dy = -1; dy <= 1 && !unsupportedWaterNeighbor; dy++) {
+      // If an edge cell touches a water type without a matching transition, extend the shallow
+      // band and use a compatible shore class instead of painting a wide dirt patch inland.
+      let waterNeighbor = -1;
+      for (let dy = -1; dy <= 1 && waterNeighbor < 0; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
           if (!dx && !dy) continue;
           const xx = x + dx, yy = y + dy;
           if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
           const ni = yy * W + xx;
-          const n = waterMask && waterMask[ni] ? C.WATER : cls[ni];
-          if (n === C.WATER && !supported(c, C.WATER)) {
-            unsupportedWaterNeighbor = true;
+          const n = cls[ni];
+          if ((n === C.WATER || n === C.SHALLOW) && !supported(c, n)) {
+            waterNeighbor = ni;
             break;
           }
         }
       }
-      if (unsupportedWaterNeighbor) {
-        if (c === C.SNOW) bad[i] = 1;
-        else { cls[i] = C.SAND; changed++; }
+      if (waterNeighbor >= 0) {
+        if (waterMask && waterMask[waterNeighbor] && cls[waterNeighbor] === C.WATER) {
+          cls[waterNeighbor] = C.SHALLOW;
+          changed++;
+        }
+        if (c === C.SNOW) {
+          // Snow has no compatible direct shoreline atlas in the supplied tilesets;
+          // retain the snowfield and use the existing mountain/shallow-water transition.
+          if (cls[i] !== C.MOUNTAIN) { cls[i] = C.MOUNTAIN; changed++; }
+        } else if (c !== C.MOUNTAIN && c !== C.SAND) {
+          // Sand already has a supported transition into Shallow Water.
+          if (cls[i] !== C.SAND) { cls[i] = C.SAND; changed++; }
+        }
         continue;
       }
 
+      // The available original tile sheets lack some direct snow/grass and snow/sand edges.
+      // Preserve the snow itself and adapt only the single adjacent land cell to the existing
+      // Snow/Dirt transition; this prevents the old two-cell dirt belt from erasing snow regions.
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
         if (!dx && !dy) continue;
         const xx = x + dx, yy = y + dy;
         if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
         const ni = yy * W + xx;
-        const n = waterMask && waterMask[ni] ? C.WATER : cls[ni];
+        const n = cls[ni];
         if (supported(c, n)) continue;
-        if (c === C.SNOW) bad[i] = 1;
-        else if (n === C.SNOW || c === C.SHALLOW) { /* handled from the other side */ }
-        else if (c !== C.MOUNTAIN) { cls[i] = C.DIRT; changed++; }
+
+        if (c === C.SNOW) {
+          if (n !== C.SNOW && n !== C.MOUNTAIN && !(waterMask && waterMask[ni]) && cls[ni] !== C.DIRT) {
+            cls[ni] = C.DIRT;
+            changed++;
+          }
+        } else if (n === C.SNOW) {
+          if (c !== C.MOUNTAIN && cls[i] !== C.DIRT) {
+            cls[i] = C.DIRT;
+            changed++;
+          }
+        } else if (c !== C.MOUNTAIN && cls[i] !== C.DIRT) {
+          cls[i] = C.DIRT;
+          changed++;
+        }
       }
-    }
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      const i = y * W + x; if (!bad[i]) continue;
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-        const xx = x + dx, yy = y + dy;
-        if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
-        const ni = yy * W + xx;
-        if (cls[ni] === C.SNOW && !(waterMask && waterMask[ni])) bad[ni] = bad[ni] || 2;
-      }
-    }
-    for (let i = 0; i < W * H; i++) {
-      if (bad[i] && cls[i] === C.SNOW && !(waterMask && waterMask[i])) { cls[i] = C.DIRT; changed++; }
     }
     return changed;
   }
   function restoreWaterMask(cls, waterMask) {
     if (!waterMask) return;
-    for (let i = 0; i < cls.length; i++) if (waterMask[i]) cls[i] = C.WATER;
+    for (let i = 0; i < cls.length; i++) {
+      if (waterMask[i] && cls[i] !== C.SHALLOW) cls[i] = C.WATER;
+    }
   }
   function finalizeClasses(cls, W, H, waterMask) {
     for (let k = 0; k < 4; k++) {
@@ -447,7 +468,7 @@
       let changed = 0;
       for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
         const i = y * W + x, c = cls[i];
-        if (c === C.WATER || (waterMask && waterMask[i])) continue;
+        if (c === C.WATER || c === C.SHALLOW || (waterMask && waterMask[i])) continue;
         const nN = y > 0 ? cls[i - W] : c, nS = y < H - 1 ? cls[i + W] : c;
         const nW = x > 0 ? cls[i - 1] : c, nE = x < W - 1 ? cls[i + 1] : c;
         const oN = nN !== c && RIMOK[nN * NCLS + c], oS = nS !== c && RIMOK[nS * NCLS + c];

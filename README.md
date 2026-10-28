@@ -89,7 +89,7 @@ python3 tests/e2e.py                      # drives the real UI on desktop and mo
 ## What the exported map contains
 
 * `Ground`, `Items` and `Units` layers (20x20 tiles), Base64 + gzip by default (zlib and CSV are available).
-* Water is the `Shallow Water` tile (id 0). Land uses id 0 of each terrain tileset. Edges use only the original `_flat` transition sets (3x7 layout).
+* Open water uses the `Water` tileset, with a two-tile coastal band using `Shallow Water`; the original `shallowwater2water_flat` atlas draws the transition between them. Land uses id 0 of each terrain tileset. Snow is preserved when elevation indicates a snowfield, instead of letting coarse land-cover labels erase it. Edges use original 3x7 transition layouts.
 * Resource pools are 3x3 blocks of `misc` tiles; every player gets a command center and a builder.
 * Tilesets are written as external `.tsx` references by default (editable folder prefix), or embedded, or copied from any working map you upload.
 * An optional `Triggers` / `map_info` layer.

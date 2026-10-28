@@ -1,7 +1,7 @@
 /* RW Map Forge - generation pipeline (Web Worker).
  * Keeps the UI responsive: downloads elevation + OSM data, classifies terrain and builds the TMX file off the main thread. */
 'use strict';
-importScripts('/js/gen.js?v=root-ocean-mask-20261028-1', '/js/arcgis.js?v=root-ocean-mask-20261028-1');
+importScripts('/js/gen.js?v=snow-shallow-transitions-20261028-1', '/js/arcgis.js?v=snow-shallow-transitions-20261028-1');
 const G = self.RWGen;
 const A = self.RWArcGIS;
 
