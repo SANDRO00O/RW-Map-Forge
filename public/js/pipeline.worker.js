@@ -562,6 +562,11 @@ async function loadSelfHostedOsm(geo, o, status) {
       successes++;
       if (item.source === 'landmask') landMaskAvailable = true;
     } else {
+      // If the server advertises an imported ocean mask, never silently generate a
+      // potentially wrong coastline when that mandatory dataset cannot be read.
+      if (item.source === 'landmask' && status && status.oceanMaskReady === true) {
+        throw new Error('The global coastline mask is required but could not be loaded: ' + item.error);
+      }
       progress('osm', 'Skipped local ' + item.label + ': ' + item.error, 0.44);
     }
   }
@@ -581,16 +586,17 @@ async function loadSelfHostedOsm(geo, o, status) {
 }
 
 async function loadOsm(geo, o) {
-  // Keep the existing remote path until the first complete global import finishes.
-  // Once the manifest is ready, all water, rivers, roads and land-cover reads stay in R2.
+  // Keep the existing online path only when the status endpoint itself is unavailable
+  // or the global import has not finished. Once ready, R2 read errors must stay visible.
+  let status = null;
   try {
     const statusRes = await fetch('/api/terrain-status');
-    const status = await statusRes.json();
-    if (status && status.ready === true) return await loadSelfHostedOsm(geo, o, status);
-    progress('osm', 'Global R2 dataset is not ready yet; using the existing online fallback', 0.24);
+    if (statusRes.ok) status = await statusRes.json();
   } catch (_) {
-    progress('osm', 'Global R2 dataset status unavailable; using the existing online fallback', 0.24);
+    status = null;
   }
+  if (status && status.ready === true) return await loadSelfHostedOsm(geo, o, status);
+  progress('osm', 'Global R2 dataset is not ready or status is unavailable; using the existing online fallback', 0.24);
   return await loadLegacyOsm(geo, o);
 }
 
