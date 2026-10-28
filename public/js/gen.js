@@ -251,7 +251,12 @@
         bestCount = count;
       }
     }
-    return best;
+
+    // Urban labels are especially risky at this grid resolution: one 0.025° cell
+    // covers several square kilometres and must not become a giant dirt patch
+    // unless the entire surrounding 3×3 neighborhood is consistently urban.
+    const required = best === 4 ? values.length : Math.ceil(values.length * 2 / 3);
+    return bestCount >= required ? best : 0;
   }
 
   // ------------------------------------------------------ classification ---
