@@ -256,10 +256,16 @@ const pack = async (u8, fmt) => (fmt === 'zlib' ? zlib.deflateSync(u8) : zlib.gz
   const rel = { type: 'relation', tags: { natural: 'water' }, members: [{ type: 'way', role: 'outer', geometry: poly.slice(0, 3) }, { type: 'way', role: 'outer', geometry: poly.slice(2) }, { type: 'way', role: 'inner', geometry: hole }] };
   const wayRiver = { type: 'way', tags: { waterway: 'river', width: '30' }, geometry: [ll(5, 70), ll(100, 80)] };
   const wood = { type: 'way', tags: { natural: 'wood' }, geometry: [[80, 70], [120, 70], [120, 100], [80, 100], [80, 70]].map(p => ll(p[0], p[1])) };
-  const ras = G.rasterizeOsm({ elements: [rel, wayRiver, wood] }, geo, W, H, { water: true, land: true, roads: false });
+  const landMaskPoly = {
+    type: 'way', tags: { rw_map_forge_landmask: 'true' },
+    geometry: [[10, 10], [30, 10], [30, 30], [10, 30], [10, 10]].map(p => ll(p[0], p[1])),
+  };
+  const ras = G.rasterizeOsm({ elements: [rel, wayRiver, wood, landMaskPoly] }, geo, W, H, { water: true, land: true, roads: false });
   let wc = 0, lc = 0; for (let i = 0; i < W * H; i++) { wc += ras.water[i]; lc += ras.land[i] ? 1 : 0; }
   console.log('osm water cells', wc, '(expected ~ 40*30-100=1100 + river)', 'wood cells', lc, '(expected ~1200)');
   console.log('hole is empty:', ras.water[35 * W + 35] === 0, ' ring body filled:', ras.water[25 * W + 25] === 1);
+  assert.equal(ras.landMask[20 * W + 20], 1, 'landmask polygons should rasterize as land');
+  assert.equal(ras.landMask[100 * W + 100], 0, 'cells outside landmask polygons should remain ocean');
   const clippedQuery = G.buildOverpassQuery(bb, { water: true, land: false, roads: false, timeout: 25 });
   const clippedBounds = [bb.s, bb.w, bb.n, bb.e].map(v => v.toFixed(6)).join(',');
   if (!clippedQuery.startsWith('[out:json][timeout:25];')) throw new Error('Overpass query timeout was not applied');
