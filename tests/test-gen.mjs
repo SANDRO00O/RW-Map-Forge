@@ -15,6 +15,12 @@ assert.equal(G.landCoverMode([1, 1, 1, 1, 7, 1, 1, 1, 1]), 1,
   'an isolated coarse water label should not survive the source-cell mode filter');
 assert.equal(G.landCoverMode(new Uint8Array(9)), 0,
   'all no-data source cells should remain no-data');
+assert.equal(G.landCoverMode([4, 4, 4, 4, 4, 4, 1, 1, 1]), 0,
+  'a mixed coarse urban neighborhood must not force a large dirt block');
+assert.equal(G.landCoverMode(new Uint8Array(9).fill(4)), 4,
+  'a consistently urban 3×3 neighborhood may still become dirt when enabled');
+assert.equal(G.landCoverMode([2, 2, 2, 2, 2, 1, 1, 1, 1]), 0,
+  'weak land-cover majorities should defer to elevation-derived terrain');
 
 // MODIS water is coarse (~2.8 km per cell at the equator) and must not override
 // positive elevation; accurate water geometry is supplied separately.
