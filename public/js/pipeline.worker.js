@@ -646,6 +646,10 @@ async function generate(p) {
   if (p.autoPlace) {
     progress('players', 'Placing players and resources', 0.88);
     st.spawns = G.autoSpawns(st, p.players, p.seed);
+    if (st.spawns.length < p.players) {
+      progress('players', 'Placed ' + st.spawns.length + ' of ' + p.players +
+        ' players: no safe buildable land was available for the remaining base(s).', 0.9);
+    }
     st.spawns.forEach((s) => { G.flatten(st, s.x, s.y, 5); G.clearTreesAround(st, s.x, s.y, 7); });
     st.pools = G.autoPools(st, st.spawns, p.neutral, p.seed);
   }
