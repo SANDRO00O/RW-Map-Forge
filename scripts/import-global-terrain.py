@@ -39,6 +39,7 @@ _upload_lock = __import__('threading').Lock()
 HYDRORIVERS_URL = "https://data.hydrosheds.org/file/HydroRIVERS/HydroRIVERS_v10_shp.zip"
 HYDROLAKES_URL = "https://data.hydrosheds.org/file/hydrolakes/HydroLAKES_polys_v10_shp.zip"
 NATURAL_EARTH_ROADS_URL = "https://naciscdn.org/naturalearth/10m/cultural/ne_10m_roads.zip"
+NATURAL_EARTH_LAND_URL = "https://naciscdn.org/naturalearth/10m/physical/ne_10m_land.zip"
 MODIS_LANDCOVER_URL = (
     "https://zenodo.org/records/8367523/files/"
     "lc_mcd12q1v061.t1_c_500m_s_20210101_20211231_go_epsg.4326_v20230818.tif?download=1"
@@ -172,6 +173,13 @@ def mark_manifest(client, ready: bool, **extra) -> None:
                 "url": "https://www.naturalearthdata.com/downloads/10m-cultural-vectors/",
                 "license": "Public domain",
                 "attribution": "Natural Earth, 1:10m cultural vectors",
+            },
+            "landmask": {
+                "name": "Natural Earth 1:10m land polygons",
+                "url": "https://www.naturalearthdata.com/downloads/10m-physical-vectors/10m-land/",
+                "license": "Public domain",
+                "attribution": "Made with Natural Earth",
+                "purpose": "Authoritative land/ocean classification to prevent DEM interpolation and terrain cleanup from painting sea as land",
             },
             "landcover": {
                 "name": "MODIS MCD12Q1 v061, 2021 IGBP land-cover class",
@@ -372,7 +380,7 @@ def main() -> None:
     work = Path(tempfile.mkdtemp(prefix="rw-map-forge-global-terrain-"))
     temp_dir = work / "tile-tmp"
     temp_dir.mkdir()
-    metrics = {"ready": True, "datasetVersion": "global-v1"}
+    metrics = {"ready": True, "datasetVersion": "global-v1.1-ocean-mask"}
     existing_sizes = list_existing_global_tiles(client)
     mark_manifest(client, False, statusMessage="Global terrain dataset import is running; don't use uncached terrain until ready.")
 
@@ -412,6 +420,20 @@ def main() -> None:
             None, "type", "0.001", temp_dir, existing_sizes
         )
         shutil.rmtree(roads_dir, ignore_errors=True)
+        zip_path.unlink(missing_ok=True)
+
+        # Natural Earth land polygons provide a real global coastline. HydroLAKES
+        # only contains inland lakes/reservoirs, so DEM elevation alone is not a
+        # reliable ocean mask, especially in shallow seas and along interpolated coasts.
+        zip_path = work / "natural-earth-land.zip"
+        download(NATURAL_EARTH_LAND_URL, zip_path)
+        landmask_dir = work / "landmask"
+        landmask_shp = extract_shapefile(zip_path, landmask_dir, "ne_10m_land.shp")
+        metrics["landmask"] = build_vector_grid(
+            client, landmask_shp, "landmask", HYDRO_DEG,
+            None, None, "0.001", temp_dir, existing_sizes
+        )
+        shutil.rmtree(landmask_dir, ignore_errors=True)
         zip_path.unlink(missing_ok=True)
 
         # MODIS MCD12Q1 2021 IGBP class raster; 156 MB source, compact tile cache output.

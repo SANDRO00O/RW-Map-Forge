@@ -211,7 +211,7 @@
   const SCHEMA = [
     {
       icon: 'globe', title: 'Data sources', rows: [
-        { type: 'switch', key: 'osmWater', label: 'OpenStreetMap water', hint: 'Lakes, reservoirs and rivers. Sea comes from elevation data.' },
+        { type: 'switch', key: 'osmWater', label: 'Lakes, reservoirs and rivers', hint: 'Adds inland water features. Ocean coastlines use the global land mask when available, with raw elevation as a fallback.' },
         { type: 'switch', key: 'osmLand', label: 'OpenStreetMap land cover', hint: 'Forests, sand, bare rock, farmland and built-up areas.' },
         { type: 'switch', key: 'osmRoads', label: 'Main roads as dirt tracks', hint: 'Heavier download. Adds major roads as dirt strips.' },
       ],
@@ -385,7 +385,7 @@
 
   function generate() {
     if (generating) return;
-    const w = new Worker('/js/pipeline.worker.js?v=water-only-20261028-1');
+    const w = new Worker('/js/pipeline.worker.js?v=root-ocean-mask-20261028-1');
     generating = w;
     $('btnGenerate').disabled = true;
     Progress.open(() => { w.terminate(); generating = null; $('btnGenerate').disabled = false; Progress.close(); });
@@ -397,7 +397,7 @@
         w.terminate(); generating = null; $('btnGenerate').disabled = false;
         try {
           Progress.update('done', 'Building preview', 1);
-          Editor.setState({ W: m.W, H: m.H, cls: m.cls, shade: m.shade, treeCand: m.treeCand, trees: m.trees, elev: m.elev, spawns: m.spawns, pools: m.pools, seed: m.seed });
+          Editor.setState({ W: m.W, H: m.H, cls: m.cls, waterMask: m.waterMask, shade: m.shade, treeCand: m.treeCand, trees: m.trees, elev: m.elev, spawns: m.spawns, pools: m.pools, seed: m.seed });
           await Editor.retile();
           hasMap = true;
           $('steps').querySelector('[data-view=editor]').disabled = false;
@@ -516,7 +516,7 @@
       ids.forEach((id) => { sub[id] = catalog[id]; });
       const opts = { fmt: S.fmt, tsMode: S.tsMode, extPrefix: S.extPrefix, builders: S.builders, mapInfo: S.mapInfo, template: template ? { sets: template } : null };
       if (opts.tsMode === 'template' && !template) { opts.tsMode = 'external'; UI.toast('No template map selected; using external tilesets instead.', 'info'); }
-      if (!exporter) exporter = new Worker('/js/pipeline.worker.js?v=water-only-20261028-1');
+      if (!exporter) exporter = new Worker('/js/pipeline.worker.js?v=root-ocean-mask-20261028-1');
       btn.disabled = true; btn.classList.add('spin');
       const done = () => { btn.disabled = false; btn.classList.remove('spin'); };
       exporter.onmessage = (e) => {
@@ -588,7 +588,9 @@
         '<p class="note">Pick a location, choose a size and detail level, and the generator converts real elevation, water and land cover into Rusted Warfare tiles. Then place players and resources and export a .tmx map.</p>' +
         '<div><span class="label">Data sources</span><ul>' +
         '<li>Elevation: Terrain Tiles on AWS Open Data (Terrarium encoding)</li>' +
-        '<li>Water and land cover: OpenStreetMap contributors (ODbL), via the Overpass API</li>' +
+        '<li>Ocean coastlines: Natural Earth 1:10m land polygons (public domain); raw elevation is the fallback</li>' +
+        '<li>Lakes and rivers: HydroLAKES and HydroRIVERS in the global R2 dataset; OpenStreetMap is the migration fallback</li>' +
+        '<li>Land cover: MODIS MCD12Q1 and OpenStreetMap where available</li>' +
         '<li>Place search: Nominatim</li>' +
         '<li>Base maps: CARTO and Esri World Imagery</li></ul></div>' +
         '<p class="note">Rusted Warfare is a trademark of Corroding Games. This is an unofficial fan tool and is not affiliated with them.</p>',

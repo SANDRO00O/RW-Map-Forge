@@ -36,6 +36,16 @@ function assertClipped(elements) {
 
 {
   const result = A.featureToElements({
+    properties: { ne_id: 101 },
+    geometry: { type: 'Polygon', coordinates: [ring] },
+  }, 'landmask', bbox, 5);
+  assert.equal(result.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(result[0].tags)), { rw_map_forge_landmask: 'true' });
+  assertClipped(result);
+}
+
+{
+  const result = A.featureToElements({
     attributes: { OBJECTID: 2 },
     geometry: { paths: [[[47.49, 30.45], [47.61, 30.45]]] },
   }, 'rivers', bbox, 10);

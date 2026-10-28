@@ -58,6 +58,71 @@ for (const outside of [G.C.SAND, G.C.GRASS, G.C.MOUNTAIN]) {
   }
 }
 
+// Sea detection uses raw DEM heights, not smoothed heights.
+{
+  const width = 16, height = 10;
+  const elev = new Float32Array(width * height).fill(80);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < 4; x++) elev[y * width + x] = -2;
+  }
+  const result = G.classify({
+    W: width, H: height, mpt: 100, lat: 54, elev,
+  }, {
+    seaLevel: 0, smooth: 3, mountPct: 0, stonePct: 0,
+    base: 'dirt', beach: false,
+  });
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < 4; x++) {
+      assert.equal(result.cls[y * width + x], G.C.WATER,
+        'smoothing must not erase shallow negative-elevation sea');
+      assert.equal(result.waterMask[y * width + x], 1,
+        'the source water mask must agree with the final sea classification');
+    }
+  }
+
+  // Player-base flattening must not turn sea into buildable land.
+  const st = {
+    W: width, H: height, cls: result.cls, waterMask: result.waterMask,
+    trees: new Uint8Array(width * height),
+  };
+  G.flatten(st, 3, 5, 5);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < 4; x++) {
+      assert.equal(st.cls[y * width + x], G.C.WATER,
+        'flattening a player base must never convert masked sea to Dirt/Grass');
+    }
+  }
+}
+
+// A global land polygon mask must classify ocean even when DEM heights are positive.
+{
+  const width = 12, height = 8;
+  const elev = new Float32Array(width * height).fill(45);
+  const landMask = new Uint8Array(width * height).fill(1);
+  for (let y = 0; y < height; y++) for (let x = 0; x < 5; x++) landMask[y * width + x] = 0;
+  const result = G.classify({
+    W: width, H: height, mpt: 200, lat: 54, elev,
+    landMask, landMaskAvailable: true,
+  }, {
+    seaLevel: -500, smooth: 2, mountPct: 0, stonePct: 0,
+    base: 'dirt', beach: false,
+  });
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < 5; x++) assert.equal(result.cls[y * width + x], G.C.WATER,
+      'the coastline mask must recover ocean omitted by imperfect/interpolated DEM values');
+    for (let x = 9; x < width; x++) assert.notEqual(result.cls[y * width + x], G.C.WATER,
+      'the global mask must preserve positive-elevation land');
+  }
+}
+
+// Automatic player placement must never invent a land base in an all-water map.
+{
+  const width = 32, height = 32;
+  const st = { W: width, H: height, cls: new Uint8Array(width * height).fill(G.C.WATER) };
+  assert.equal(G.autoSpawns(st, 2, 17).length, 0,
+    'when no legal base exists, player placement must skip it rather than flatten ocean into land');
+}
+
 // Coarse categorical land-cover samples should not preserve isolated one-cell noise.
 assert.equal(G.landCoverMode([5, 5, 5, 5, 2, 5, 5, 5, 5]), 5,
   'an isolated barren cell should follow the surrounding land-cover majority');
@@ -194,10 +259,16 @@ const pack = async (u8, fmt) => (fmt === 'zlib' ? zlib.deflateSync(u8) : zlib.gz
   const rel = { type: 'relation', tags: { natural: 'water' }, members: [{ type: 'way', role: 'outer', geometry: poly.slice(0, 3) }, { type: 'way', role: 'outer', geometry: poly.slice(2) }, { type: 'way', role: 'inner', geometry: hole }] };
   const wayRiver = { type: 'way', tags: { waterway: 'river', width: '30' }, geometry: [ll(5, 70), ll(100, 80)] };
   const wood = { type: 'way', tags: { natural: 'wood' }, geometry: [[80, 70], [120, 70], [120, 100], [80, 100], [80, 70]].map(p => ll(p[0], p[1])) };
-  const ras = G.rasterizeOsm({ elements: [rel, wayRiver, wood] }, geo, W, H, { water: true, land: true, roads: false });
+  const landMaskPoly = {
+    type: 'way', tags: { rw_map_forge_landmask: 'true' },
+    geometry: [[10, 10], [30, 10], [30, 30], [10, 30], [10, 10]].map(p => ll(p[0], p[1])),
+  };
+  const ras = G.rasterizeOsm({ elements: [rel, wayRiver, wood, landMaskPoly] }, geo, W, H, { water: true, land: true, roads: false });
   let wc = 0, lc = 0; for (let i = 0; i < W * H; i++) { wc += ras.water[i]; lc += ras.land[i] ? 1 : 0; }
   console.log('osm water cells', wc, '(expected ~ 40*30-100=1100 + river)', 'wood cells', lc, '(expected ~1200)');
   console.log('hole is empty:', ras.water[35 * W + 35] === 0, ' ring body filled:', ras.water[25 * W + 25] === 1);
+  assert.equal(ras.landMask[20 * W + 20], 1, 'landmask polygons should rasterize as land');
+  assert.equal(ras.landMask[100 * W + 100], 0, 'cells outside landmask polygons should remain ocean');
   const clippedQuery = G.buildOverpassQuery(bb, { water: true, land: false, roads: false, timeout: 25 });
   const clippedBounds = [bb.s, bb.w, bb.n, bb.e].map(v => v.toFixed(6)).join(',');
   if (!clippedQuery.startsWith('[out:json][timeout:25];')) throw new Error('Overpass query timeout was not applied');

@@ -329,6 +329,11 @@
         if (Editor.flatten) G.flatten(st, x, y, 5);
         else { toast('This spot is not buildable (water or mountain). Enable levelling or pick another place.', 'err'); return; }
       }
+      // Flattening may level mountains, but it must never create land in masked sea.
+      if (!G.isBuildable(st.cls, W, H, x, y, 5)) {
+        toast('This location is still water after levelling. Choose a land location for the base.', 'err');
+        return;
+      }
       G.clearTreesAround(st, x, y, 7);
       st.spawns = st.spawns.filter((s) => s.team !== Editor.team);
       st.spawns.push({ x: x, y: y, team: Editor.team });

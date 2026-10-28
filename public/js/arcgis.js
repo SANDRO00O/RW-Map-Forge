@@ -183,6 +183,7 @@
     else if (kind === 'rivers') tags = { waterway: 'river' };
     else if (kind === 'land') tags = landTags(properties);
     else if (kind === 'roads') tags = roadTags(properties);
+    else if (kind === 'landmask') tags = { rw_map_forge_landmask: 'true' };
     else return [];
     if (!tags) return [];
 
