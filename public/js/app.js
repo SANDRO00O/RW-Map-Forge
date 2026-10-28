@@ -211,7 +211,7 @@
   const SCHEMA = [
     {
       icon: 'globe', title: 'Data sources', rows: [
-        { type: 'switch', key: 'osmWater', label: 'OpenStreetMap water', hint: 'Lakes, reservoirs and rivers. Sea comes from elevation data.' },
+        { type: 'switch', key: 'osmWater', label: 'Lakes, reservoirs and rivers', hint: 'Adds inland water features. Ocean coastlines use the global land mask when available, with raw elevation as a fallback.' },
         { type: 'switch', key: 'osmLand', label: 'OpenStreetMap land cover', hint: 'Forests, sand, bare rock, farmland and built-up areas.' },
         { type: 'switch', key: 'osmRoads', label: 'Main roads as dirt tracks', hint: 'Heavier download. Adds major roads as dirt strips.' },
       ],
@@ -588,7 +588,9 @@
         '<p class="note">Pick a location, choose a size and detail level, and the generator converts real elevation, water and land cover into Rusted Warfare tiles. Then place players and resources and export a .tmx map.</p>' +
         '<div><span class="label">Data sources</span><ul>' +
         '<li>Elevation: Terrain Tiles on AWS Open Data (Terrarium encoding)</li>' +
-        '<li>Water and land cover: OpenStreetMap contributors (ODbL), via the Overpass API</li>' +
+        '<li>Ocean coastlines: Natural Earth 1:10m land polygons (public domain); raw elevation is the fallback</li>' +
+        '<li>Lakes and rivers: HydroLAKES and HydroRIVERS in the global R2 dataset; OpenStreetMap is the migration fallback</li>' +
+        '<li>Land cover: MODIS MCD12Q1 and OpenStreetMap where available</li>' +
         '<li>Place search: Nominatim</li>' +
         '<li>Base maps: CARTO and Esri World Imagery</li></ul></div>' +
         '<p class="note">Rusted Warfare is a trademark of Corroding Games. This is an unofficial fan tool and is not affiliated with them.</p>',
