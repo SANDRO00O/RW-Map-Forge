@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import boto3
+from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError
 import numpy as np
 import rasterio
 from rasterio.windows import Window
@@ -122,12 +124,20 @@ def r2_client():
         region_name="auto",
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
+        # R2 can return transient InternalError / 5xx responses during bulk imports.
+        # Adaptive retries smooth bursts; put_bytes adds an idempotent final retry layer.
+        config=Config(
+            retries={"mode": "adaptive", "max_attempts": 10},
+            connect_timeout=20,
+            read_timeout=120,
+            max_pool_connections=16,
+        ),
     )
 
 def put_bytes(client, key: str, body: bytes, content_type: str) -> None:
     global _uploaded_bytes
-    # Reserve the byte budget under a lock, but upload outside the lock so the
-    # tile workers can use R2's throughput in parallel.
+    # Reserve once per object; retries reuse the same key/body, so a timeout after
+    # a successful server-side write is safe to retry idempotently.
     with _upload_lock:
         if _uploaded_bytes + len(body) > MAX_UPLOAD_BYTES:
             raise RuntimeError(
@@ -135,14 +145,45 @@ def put_bytes(client, key: str, body: bytes, content_type: str) -> None:
                 "raise the GitHub Actions variable only after reviewing R2 pricing."
             )
         _uploaded_bytes += len(body)
+
+    max_attempts = 8
+    retryable_codes = {
+        "InternalError", "InternalServerError", "SlowDown", "ServiceUnavailable",
+        "RequestTimeout", "RequestTimeoutException", "Throttling", "ThrottlingException",
+        "TooManyRequestsException", "500", "502", "503", "504",
+    }
     try:
-        client.put_object(
-            Bucket=BUCKET,
-            Key=key,
-            Body=body,
-            ContentType=content_type,
-            CacheControl="public, max-age=31536000, immutable",
-        )
+        for attempt in range(1, max_attempts + 1):
+            try:
+                client.put_object(
+                    Bucket=BUCKET,
+                    Key=key,
+                    Body=body,
+                    ContentType=content_type,
+                    CacheControl="public, max-age=31536000, immutable",
+                )
+                return
+            except (ClientError, BotoCoreError, OSError) as exc:
+                code = ""
+                status = None
+                if isinstance(exc, ClientError):
+                    response = exc.response or {}
+                    code = str((response.get("Error") or {}).get("Code", ""))
+                    status = (response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
+                retryable = (
+                    code in retryable_codes
+                    or status in (408, 425, 429, 500, 502, 503, 504)
+                    or isinstance(exc, (BotoCoreError, OSError))
+                )
+                if not retryable or attempt >= max_attempts:
+                    raise
+                delay = min(30.0, 2.0 ** (attempt - 1))
+                log(
+                    f"Transient R2 upload error for {key} "
+                    f"(attempt {attempt}/{max_attempts}, code={code or type(exc).__name__}, "
+                    f"HTTP {status or 'n/a'}); retrying in {delay:.0f}s."
+                )
+                time.sleep(delay)
     except Exception:
         with _upload_lock:
             _uploaded_bytes -= len(body)
