@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Build compact, self-hosted global terrain tiles and upload them to Cloudflare R2.
 
-The importer reuses successfully uploaded tiles when rerun after a failure. It
-only publishes manifest.ready=true after every dataset has been processed.
+The importer reuses successfully uploaded tiles when rerun after a failure, and
+retries transient R2 PutObject errors with exponential backoff. It only publishes
+manifest.ready=true after every dataset has been processed.
 """
 from __future__ import annotations
 
