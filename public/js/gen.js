@@ -263,17 +263,31 @@
   function classify(inp, pp) {
     const p = Object.assign({}, DEFAULTS, pp || {});
     const W = inp.W, H = inp.H, N = W * H, mpt = inp.mpt;
-    let e = inp.elev;
+    // Preserve raw heights: smoothing is for terrain shape/slope, never for deciding
+    // whether a cell is sea. Averaging nearby positive land elevations can erase shallow
+    // negative/zero ocean pixels on low-relief coastlines.
+    const rawElev = inp.elev;
+    let e = rawElev;
     for (let i = 0; i < p.smooth; i++) e = blur3(e, W, H);
 
     const osmWater = inp.water, osmLand = inp.land, osmRoad = inp.road;
-    const water = new Uint8Array(N), sea = new Uint8Array(N), land = new Uint8Array(N);
+    const landMask = inp.landMask;
+    const hasLandMask = inp.landMaskAvailable === true && landMask && landMask.length === N;
+    const water = new Uint8Array(N), land = new Uint8Array(N);
+    let demWaterCells = 0, oceanMaskCells = 0, featureWaterCells = 0, waterCells = 0;
     for (let i = 0; i < N; i++) {
-      const lowSea = e[i] <= p.seaLevel;
-      // Only elevation and geometrically clipped water features can mark a cell as water.
-      // The 0.025° MODIS raster is too coarse to turn an entire multi-kilometre cell into water.
-      const w = lowSea || (osmWater && osmWater[i]);
-      water[i] = w ? 1 : 0; sea[i] = lowSea ? 1 : 0; land[i] = w ? 0 : 1;
+      const lowSea = rawElev[i] <= p.seaLevel;
+      // A global coastline mask fills gaps where the DEM reports ocean as 0/positive.
+      // The DEM threshold remains a fallback and still supports the configurable sea level.
+      const ocean = hasLandMask && landMask[i] === 0;
+      const featureWater = !!(osmWater && osmWater[i]);
+      const w = lowSea || ocean || featureWater;
+      if (lowSea) demWaterCells++;
+      if (ocean) oceanMaskCells++;
+      if (featureWater) featureWaterCells++;
+      if (w) waterCells++;
+      water[i] = w ? 1 : 0;
+      land[i] = w ? 0 : 1;
     }
     const cls = new Uint8Array(N);
 
@@ -328,7 +342,7 @@
       if (mMask[i]) c = C.MOUNTAIN;
       cls[i] = c;
     }
-    finalizeClasses(cls, W, H);
+    finalizeClasses(cls, W, H, water);
 
     // hillshade for the preview
     const shade = new Uint8Array(N), ex = 3;
@@ -339,38 +353,50 @@
       const dot = (dzdx * 0.5 + dzdy * 0.5 + 0.7) * nz / 0.99; // light from the north-west
       shade[y * W + x] = clamp(Math.round(dot / 0.707 * 100), 45, 190);
     }
-    return { cls: cls, shade: shade, treeCand: treeCand, thresholds: { mountain: thM, stone: thS, snowline: sl } };
+    return {
+      cls: cls, shade: shade, treeCand: treeCand, waterMask: water,
+      waterStats: {
+        demCells: demWaterCells, oceanMaskCells: oceanMaskCells,
+        featureCells: featureWaterCells, totalCells: waterCells,
+        landMaskAvailable: !!hasLandMask,
+      },
+      thresholds: { mountain: thM, stone: thS, snowline: sl },
+    };
   }
 
   function supported(a, b) { return a === b || RIMOK[a * NCLS + b] === 1 || RIMOK[b * NCLS + a] === 1; }
   // Removes adjacencies that have no original transition tileset (snow next to grass/sand/water, water next to land, ...)
   // by inserting a two-cell dirt belt between snow and whatever it cannot connect to.
-  function fixUnsupported(cls, W, H) {
+  function fixUnsupported(cls, W, H, waterMask) {
     let changed = 0; const bad = new Uint8Array(W * H);
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      const i = y * W + x, c = cls[i];
-      // Water is a source classification (sea-level elevation or clipped water geometry).
-      // Coastline cleanup must never rewrite it as dirt or another terrain class.
+      const i = y * W + x;
+      // Never let visual transition repair overwrite source-classified water.
+      if (waterMask && waterMask[i]) {
+        if (cls[i] !== C.WATER) { cls[i] = C.WATER; changed++; }
+        continue;
+      }
+      const c = cls[i];
       if (c === C.WATER) continue;
 
-      // Dirt/snow and some other classes have no direct transition into Water.
-      // Convert that land-side edge to Sand instead of changing the water cell.
+      // Coastline repair changes the land-side class only.
       let unsupportedWaterNeighbor = false;
       for (let dy = -1; dy <= 1 && !unsupportedWaterNeighbor; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
           if (!dx && !dy) continue;
           const xx = x + dx, yy = y + dy;
           if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
-          const n = cls[yy * W + xx];
-          if (n === C.WATER && !supported(c, n)) {
+          const ni = yy * W + xx;
+          const n = waterMask && waterMask[ni] ? C.WATER : cls[ni];
+          if (n === C.WATER && !supported(c, C.WATER)) {
             unsupportedWaterNeighbor = true;
             break;
           }
         }
       }
       if (unsupportedWaterNeighbor) {
-        cls[i] = C.SAND;
-        changed++;
+        if (c === C.SNOW) bad[i] = 1;
+        else { cls[i] = C.SAND; changed++; }
         continue;
       }
 
@@ -378,39 +404,50 @@
         if (!dx && !dy) continue;
         const xx = x + dx, yy = y + dy;
         if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
-        const n = cls[yy * W + xx];
+        const ni = yy * W + xx;
+        const n = waterMask && waterMask[ni] ? C.WATER : cls[ni];
         if (supported(c, n)) continue;
-        if (c === C.SNOW) bad[i] = 1; // dirt belt inside the snow
+        if (c === C.SNOW) bad[i] = 1;
         else if (n === C.SNOW || c === C.SHALLOW) { /* handled from the other side */ }
         else if (c !== C.MOUNTAIN) { cls[i] = C.DIRT; changed++; }
       }
     }
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { // grow the belt by one cell inside the snow
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = y * W + x; if (!bad[i]) continue;
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
         const xx = x + dx, yy = y + dy;
         if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
-        if (cls[yy * W + xx] === C.SNOW) bad[yy * W + xx] = bad[yy * W + xx] || 2;
+        const ni = yy * W + xx;
+        if (cls[ni] === C.SNOW && !(waterMask && waterMask[ni])) bad[ni] = bad[ni] || 2;
       }
     }
-    for (let i = 0; i < W * H; i++) if (bad[i] && cls[i] === C.SNOW) { cls[i] = C.DIRT; changed++; }
+    for (let i = 0; i < W * H; i++) {
+      if (bad[i] && cls[i] === C.SNOW && !(waterMask && waterMask[i])) { cls[i] = C.DIRT; changed++; }
+    }
     return changed;
   }
-  function finalizeClasses(cls, W, H) {
+  function restoreWaterMask(cls, waterMask) {
+    if (!waterMask) return;
+    for (let i = 0; i < cls.length; i++) if (waterMask[i]) cls[i] = C.WATER;
+  }
+  function finalizeClasses(cls, W, H, waterMask) {
     for (let k = 0; k < 4; k++) {
-      const a = fixUnsupported(cls, W, H);
-      regularize(cls, W, H, 6);
-      if (!a) break;
+      restoreWaterMask(cls, waterMask);
+      const changed = fixUnsupported(cls, W, H, waterMask);
+      restoreWaterMask(cls, waterMask);
+      regularize(cls, W, H, 6, waterMask);
+      restoreWaterMask(cls, waterMask);
+      if (!changed) break;
     }
+    restoreWaterMask(cls, waterMask);
   }
   // Removes cases that have no transition tile (1-wide strips or narrow tips)
-  function regularize(cls, W, H, passes) {
+  function regularize(cls, W, H, passes, waterMask) {
     for (let p = 0; p < passes; p++) {
       let changed = 0;
       for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
         const i = y * W + x, c = cls[i];
-        // Keep sea and other source-classified water cells stable during autotile cleanup.
-        if (c === C.WATER) continue;
+        if (c === C.WATER || (waterMask && waterMask[i])) continue;
         const nN = y > 0 ? cls[i - W] : c, nS = y < H - 1 ? cls[i + W] : c;
         const nW = x > 0 ? cls[i - 1] : c, nE = x < W - 1 ? cls[i + 1] : c;
         const oN = nN !== c && RIMOK[nN * NCLS + c], oS = nS !== c && RIMOK[nS * NCLS + c];
@@ -495,7 +532,7 @@
     }
     return true;
   }
-  // Makes the circle buildable (removes water, mountains and trees)
+  // Makes a base area buildable without ever converting water cells to land.
   function flatten(st, x, y, r) {
     const W = st.W, H = st.H, cls = st.cls;
     const cnt = new Array(NCLS).fill(0);
@@ -511,10 +548,11 @@
       const xx = x + dx, yy = y + dy;
       if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
       const i = yy * W + xx;
-      if (!BUILDABLE[cls[i]]) cls[i] = fill;
+      // Player placement must not punch a Dirt/Grass hole through a coastline.
+      if (cls[i] !== C.WATER && !(st.waterMask && st.waterMask[i]) && !BUILDABLE[cls[i]]) cls[i] = fill;
       st.trees[i] = 0;
     }
-    finalizeClasses(cls, W, H);
+    finalizeClasses(cls, W, H, st.waterMask);
   }
   function placeTrees(st, density, seed) {
     const N = st.W * st.H, rnd = mulberry32(seed + 77);
