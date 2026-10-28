@@ -58,6 +58,68 @@ for (const outside of [G.C.SAND, G.C.GRASS, G.C.MOUNTAIN]) {
   }
 }
 
+// Sea detection uses raw DEM heights, not smoothed heights.
+{
+  const width = 16, height = 10;
+  const elev = new Float32Array(width * height).fill(80);
+  const waterMask = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < 4; x++) {
+      elev[y * width + x] = -2;
+      waterMask[y * width + x] = 0;
+    }
+    for (let x = 4; x < width; x++) waterMask[y * width + x] = 1;
+  }
+  const result = G.classify({
+    W: width, H: height, mpt: 100, lat: 54, elev,
+  }, {
+    seaLevel: 0, smooth: 3, mountPct: 0, stonePct: 0,
+    base: 'dirt', beach: false,
+  });
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < 4; x++) {
+      assert.equal(result.cls[y * width + x], G.C.WATER,
+        'smoothing must not erase shallow negative-elevation sea');
+      assert.equal(result.waterMask[y * width + x], 1,
+        'the source water mask must agree with the final sea classification');
+    }
+  }
+
+  // Player-base flattening must not turn sea into buildable land.
+  const st = {
+    W: width, H: height, cls: result.cls, waterMask: result.waterMask,
+    trees: new Uint8Array(width * height),
+  };
+  G.flatten(st, 3, 5, 5);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < 4; x++) {
+      assert.equal(st.cls[y * width + x], G.C.WATER,
+        'flattening a player base must never convert masked sea to Dirt/Grass');
+    }
+  }
+}
+
+// A global land polygon mask must classify ocean even when DEM heights are positive.
+{
+  const width = 12, height = 8;
+  const elev = new Float32Array(width * height).fill(45);
+  const landMask = new Uint8Array(width * height).fill(1);
+  for (let y = 0; y < height; y++) for (let x = 0; x < 5; x++) landMask[y * width + x] = 0;
+  const result = G.classify({
+    W: width, H: height, mpt: 200, lat: 54, elev,
+    landMask, landMaskAvailable: true,
+  }, {
+    seaLevel: -500, smooth: 2, mountPct: 0, stonePct: 0,
+    base: 'dirt', beach: false,
+  });
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < 5; x++) assert.equal(result.cls[y * width + x], G.C.WATER,
+      'the coastline mask must recover ocean omitted by imperfect/interpolated DEM values');
+    for (let x = 9; x < width; x++) assert.notEqual(result.cls[y * width + x], G.C.WATER,
+      'the global mask must preserve positive-elevation land');
+  }
+}
+
 // Coarse categorical land-cover samples should not preserve isolated one-cell noise.
 assert.equal(G.landCoverMode([5, 5, 5, 5, 2, 5, 5, 5, 5]), 5,
   'an isolated barren cell should follow the surrounding land-cover majority');
