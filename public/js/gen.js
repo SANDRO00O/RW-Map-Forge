@@ -349,21 +349,47 @@
     let changed = 0; const bad = new Uint8Array(W * H);
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = y * W + x, c = cls[i];
+      // Water is a source classification (sea-level elevation or clipped water geometry).
+      // Coastline cleanup must never rewrite it as dirt or another terrain class.
+      if (c === C.WATER) continue;
+
+      // Dirt/snow and some other classes have no direct transition into Water.
+      // Convert that land-side edge to Sand instead of changing the water cell.
+      let unsupportedWaterNeighbor = false;
+      for (let dy = -1; dy <= 1 && !unsupportedWaterNeighbor; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue;
+          const xx = x + dx, yy = y + dy;
+          if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+          const n = cls[yy * W + xx];
+          if (n === C.WATER && !supported(c, n)) {
+            unsupportedWaterNeighbor = true;
+            break;
+          }
+        }
+      }
+      if (unsupportedWaterNeighbor) {
+        cls[i] = C.SAND;
+        changed++;
+        continue;
+      }
+
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
         if (!dx && !dy) continue;
-        const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+        const xx = x + dx, yy = y + dy;
+        if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
         const n = cls[yy * W + xx];
         if (supported(c, n)) continue;
-        if (c === C.SNOW) bad[i] = 1;                                       // dirt belt inside the snow
+        if (c === C.SNOW) bad[i] = 1; // dirt belt inside the snow
         else if (n === C.SNOW || c === C.SHALLOW) { /* handled from the other side */ }
-        else if (c === C.DIRT && n === C.SHALLOW) { cls[i] = C.SAND; changed++; }   // dirt next to water -> sand
         else if (c !== C.MOUNTAIN) { cls[i] = C.DIRT; changed++; }
       }
     }
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {   // grow the belt by one cell inside the snow
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { // grow the belt by one cell inside the snow
       const i = y * W + x; if (!bad[i]) continue;
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-        const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+        const xx = x + dx, yy = y + dy;
+        if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
         if (cls[yy * W + xx] === C.SNOW) bad[yy * W + xx] = bad[yy * W + xx] || 2;
       }
     }
@@ -383,6 +409,8 @@
       let changed = 0;
       for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
         const i = y * W + x, c = cls[i];
+        // Keep sea and other source-classified water cells stable during autotile cleanup.
+        if (c === C.WATER) continue;
         const nN = y > 0 ? cls[i - W] : c, nS = y < H - 1 ? cls[i + W] : c;
         const nW = x > 0 ? cls[i - 1] : c, nE = x < W - 1 ? cls[i + 1] : c;
         const oN = nN !== c && RIMOK[nN * NCLS + c], oS = nS !== c && RIMOK[nS * NCLS + c];
