@@ -1,11 +1,6 @@
 name: Import global terrain datasets to R2
 
 on:
-  # Temporary one-shot recovery trigger, filtered only to the importer script.
-  # It is removed after the retry run is queued; normal imports remain manual.
-  push:
-    paths:
-      - "scripts/import-global-terrain.py"
   workflow_dispatch:
     inputs:
       confirm_global_import:
@@ -26,7 +21,7 @@ concurrency:
 
 jobs:
   import:
-    if: github.event_name == 'push' || inputs.confirm_global_import == 'yes'
+    if: inputs.confirm_global_import == 'yes'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
