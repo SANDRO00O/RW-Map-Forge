@@ -62,13 +62,8 @@ for (const outside of [G.C.SAND, G.C.GRASS, G.C.MOUNTAIN]) {
 {
   const width = 16, height = 10;
   const elev = new Float32Array(width * height).fill(80);
-  const waterMask = new Uint8Array(width * height);
   for (let y = 0; y < height; y++) {
-    for (let x = 0; x < 4; x++) {
-      elev[y * width + x] = -2;
-      waterMask[y * width + x] = 0;
-    }
-    for (let x = 4; x < width; x++) waterMask[y * width + x] = 1;
+    for (let x = 0; x < 4; x++) elev[y * width + x] = -2;
   }
   const result = G.classify({
     W: width, H: height, mpt: 100, lat: 54, elev,
