@@ -8,20 +8,22 @@
   // ------------------------------------------------------------ classes ---
   const C = { DEEP: 0, WATER: 1, SHALLOW: 2, SAND: 3, DIRT: 4, GRASS: 5, STONE: 6, MOUNTAIN: 7, SNOW: 8 };
   const NCLS = 9;
-  const CLS_NAMES = ['Deep water', 'Water', 'Water', 'Sand', 'Dirt', 'Grass', 'Stone', 'Mountain', 'Snow'];
+  const CLS_NAMES = ['Deep water', 'Water', 'Shallow water', 'Sand', 'Dirt', 'Grass', 'Stone', 'Mountain', 'Snow'];
   const CLS_COLORS = ['#0a2f66', '#1b5fb5', '#3b86d8', '#d8bd8a', '#8a5a3a', '#3f7d2e', '#7b7b7b', '#8c6d57', '#eef3f8'];
   const TEAM_COLORS = ['#e53935', '#1e88e5', '#43a047', '#fdd835', '#8e24aa', '#fb8c00', '#00acc1', '#6d4c41', '#ec407a', '#9e9e9e'];
 
-  // Fill tile per class: local id 0 only (as in real maps; the other ids are decorations or carry special properties).
-  // All water = Shallow Water id 0 (the tile that carries the 'water' property).
+  // Each water depth has its own base tileset; transition sets blend neighboring depths.
+  // The depth bands are estimated from distance to shore, not bathymetric measurements.
   const BASE_SETS = [
-    ['shallowwater', [0]], ['shallowwater', [0]], ['shallowwater', [0]],
+    ['deepwater', [0]], ['water', [0]], ['shallowwater', [0]],
     ['sand', [0]], ['dirt', [0]], ['longgrass', [0]], ['mountain', [0]], ['mountain', [0]], ['snow', [0]],
   ];
 
   // [outside, inside, transition image]: the 'inside' cell is the one that receives the edge tile.
   // Only _flat sets with the 3x7 layout (ring 0-8 + inner corners 12/14/18/20); this layout is confirmed by a working map.
   const RIM_DEF = [
+    [C.SHALLOW, C.WATER, 'shallowwater2water_flat'],
+    [C.WATER, C.DEEP, 'water2deepwater_flat'],
     [C.SAND, C.SHALLOW, 'sand2shallowwater_flat'],
     [C.GRASS, C.SHALLOW, 'longgrass2shallowwater_flat'],
     [C.MOUNTAIN, C.SHALLOW, 'mountain2shallowwater_flat'],
@@ -53,6 +55,11 @@
     base: 'auto', snowShift: 0, beach: true, beachW: 2,
     urbanDirt: true, roads: false, treeDensity: 0.45, seed: 1,
   };
+
+  // Approximate depth bands, measured in map-cell distances from the nearest land cell.
+  // A narrow river/lake stays shallow; wide water bodies gain a middle band and deep interior.
+  const SHALLOW_WATER_MAX_CELLS = 2;
+  const MID_WATER_MAX_CELLS = 8;
 
   // ------------------------------------------------------------ helpers ---
   function mulberry32(a) {
@@ -306,11 +313,16 @@
     else if (p.base === 'auto' && Math.abs(lat) > 66) base = C.SNOW;
     const sl = snowline(lat, p.snowShift), alpine = sl > 800 ? sl * 0.75 : 1e9;
     const dLand = p.beach ? chamfer(water, W, H) : null; // for land cells: distance to water
+    const waterShoreDistance = chamfer(land, W, H); // for water cells: distance to nearest land
     const treeCand = new Uint8Array(N);
 
     for (let i = 0; i < N; i++) {
       if (water[i]) {
-        cls[i] = C.SHALLOW;   // all water is a single tile (Shallow Water id 0); no deep water
+        // Estimate water depth from distance to shore. Actual ocean-floor depth is not
+        // reliably represented by the elevation source, so use consistent map-cell bands.
+        const shoreCells = waterShoreDistance[i] / 3; // chamfer orthogonal step = 3
+        cls[i] = shoreCells <= SHALLOW_WATER_MAX_CELLS ? C.SHALLOW
+          : shoreCells <= MID_WATER_MAX_CELLS ? C.WATER : C.DEEP;
         continue;
       }
       let c = base; const el = e[i];

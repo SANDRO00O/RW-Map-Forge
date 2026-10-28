@@ -8,6 +8,33 @@ const mod = { exports: {} };
 vm.runInNewContext(readFileSync(new URL('../public/js/gen.js', import.meta.url), 'utf8'), { module: mod, Buffer, console });
 const G = mod.exports;
 
+// Water depth uses three distinct base sets and the game's matching flat transitions.
+assert.deepEqual(JSON.parse(JSON.stringify(G.BASE_SETS.slice(0, 3))), [
+  ['deepwater', [0]], ['water', [0]], ['shallowwater', [0]],
+]);
+assert.ok(G.RIM_DEF.some(([outside, inside, set]) =>
+  outside === G.C.SHALLOW && inside === G.C.WATER && set === 'shallowwater2water_flat'));
+assert.ok(G.RIM_DEF.some(([outside, inside, set]) =>
+  outside === G.C.WATER && inside === G.C.DEEP && set === 'water2deepwater_flat'));
+
+// A broad water body should have a shallow shore, a regular-water band, and deep interior.
+{
+  const width = 25, height = 25;
+  const elev = new Float32Array(width * height).fill(100);
+  const water = new Uint8Array(width * height);
+  for (let y = 2; y <= 22; y++) {
+    for (let x = 2; x <= 22; x++) water[y * width + x] = 1;
+  }
+  const result = G.classify(
+    { W: width, H: height, mpt: 100, lat: 0, elev, water },
+    { seaLevel: 0, smooth: 0, mountPct: 0, stonePct: 0, base: 'grass', beach: false },
+  );
+  assert.equal(result.cls[12 * width + 2], G.C.SHALLOW, 'shoreline should be shallow water');
+  assert.equal(result.cls[12 * width + 5], G.C.WATER, 'water away from shore should use the middle band');
+  assert.equal(result.cls[12 * width + 12], G.C.DEEP, 'deep water should occupy the broad interior');
+}
+
+
 // Coarse categorical land-cover samples should not preserve isolated one-cell noise.
 assert.equal(G.landCoverMode([5, 5, 5, 5, 2, 5, 5, 5, 5]), 5,
   'an isolated barren cell should follow the surrounding land-cover majority');
