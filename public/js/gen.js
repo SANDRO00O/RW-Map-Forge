@@ -712,6 +712,7 @@
   function rasterizeOsm(json, geo, W, H, o) {
     o = o || {};
     const water = new Uint8Array(W * H), land = new Uint8Array(W * H), road = new Uint8Array(W * H);
+    const landMask = new Uint8Array(W * H);
     const els = (json && json.elements) || [];
     const toCellArr = function (pts) {
       const a = new Float64Array(pts.length * 2);
@@ -720,6 +721,7 @@
     };
     const geom = function (g) { return g.map(function (p) { return [p.lat, p.lon]; }); };
     const paintWater = function (rings) { fillRings(rings, W, H, function (y, a, b) { for (let x = a; x < b; x++) water[y * W + x] = 1; }); };
+    const paintLandMask = function (rings) { fillRings(rings, W, H, function (y, a, b) { for (let x = a; x < b; x++) landMask[y * W + x] = 1; }); };
     const paintLand = function (rings, code) {
       const pr = LAND_PRIO[code];
       fillRings(rings, W, H, function (y, a, b) {
@@ -752,10 +754,11 @@
         if (segs.length) rings = stitchRings(segs).map(toCellArr);
       }
       if (!rings) return;
+      if (t.rw_map_forge_landmask === 'true') { paintLandMask(rings); return; }
       if (isWaterArea(t)) { if (o.water !== false) paintWater(rings); return; }
       if (o.land !== false) { const code = landCode(t); if (code) paintLand(rings, code); }
     });
-    return { water: water, land: land, road: road };
+    return { water: water, land: land, road: road, landMask: landMask };
   }
   function buildOverpassQuery(bbox, o) {
     const B = '(' + [bbox.s, bbox.w, bbox.n, bbox.e].map(function (v) { return v.toFixed(6); }).join(',') + ')';
