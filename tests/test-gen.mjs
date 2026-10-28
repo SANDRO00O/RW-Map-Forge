@@ -8,14 +8,17 @@ const mod = { exports: {} };
 vm.runInNewContext(readFileSync(new URL('../public/js/gen.js', import.meta.url), 'utf8'), { module: mod, Buffer, console });
 const G = mod.exports;
 
-// Every water cell uses the normal Water tileset; no depth-based variants are generated.
+// Coastal water gets a Shallow Water band; the interior remains regular Water.
 assert.deepEqual(JSON.parse(JSON.stringify(G.BASE_SETS.slice(0, 3))), [
-  ['water', [0]], ['water', [0]], ['water', [0]],
+  ['water', [0]], ['water', [0]], ['shallowwater', [0]],
 ]);
 for (const outside of [G.C.SAND, G.C.GRASS, G.C.MOUNTAIN]) {
-  assert.ok(G.RIM_DEF.some(([from, to]) => from === outside && to === G.C.WATER),
-    'coast transitions should lead directly into regular Water');
+  assert.ok(G.RIM_DEF.some(([from, to]) => from === outside && to === G.C.SHALLOW),
+    'land-to-water transitions should enter Shallow Water, not jump directly into Water');
 }
+assert.ok(G.RIM_DEF.some(([from, to, name]) =>
+  from === G.C.SHALLOW && to === G.C.WATER && name === 'shallowwater2water_flat'),
+  'Shallow Water must have an original transition into regular Water');
 {
   const width = 25, height = 25;
   const elev = new Float32Array(width * height).fill(100);
@@ -29,13 +32,22 @@ for (const outside of [G.C.SAND, G.C.GRASS, G.C.MOUNTAIN]) {
   );
   const waterClasses = Array.from(result.cls).filter(cls =>
     cls === G.C.DEEP || cls === G.C.WATER || cls === G.C.SHALLOW);
-  assert.equal(waterClasses.length, 21 * 21, 'all water area cells should be classified as water');
-  assert.ok(waterClasses.every(cls => cls === G.C.WATER),
-    'no cell should be classified as shallow or deep water');
+  assert.equal(waterClasses.length, 21 * 21, 'all source-water cells should remain water');
+  assert.ok(waterClasses.every(cls => cls === G.C.WATER || cls === G.C.SHALLOW),
+    'only regular and shallow Water classes should be used for generated water');
+  assert.equal(result.cls[12 * width + 2], G.C.SHALLOW,
+    'the edge of a water body should be shallow');
+  assert.equal(result.cls[12 * width + 12], G.C.WATER,
+    'the interior of a water body should remain regular Water');
+  const shoreReg = G.makeReg();
+  G.autotile(result.cls, width, height, shoreReg, 1);
+  assert.ok(shoreReg.ids.includes('shallowwater2water_flat'),
+    'autotiling must actually use the Water/Shallow Water transition atlas');
+  assert.ok(shoreReg.ids.includes('longgrass2shallowwater_flat'),
+    'autotiling must use the proper land/Shallow Water transition atlas');
 }
 
-
-// Negative-elevation sea must survive coastline cleanup even when the surrounding land is Dirt.
+// Negative-elevation sea must survive coastline cleanup; only its edge becomes shallow.
 {
   const width = 24, height = 16;
   const elev = new Float32Array(width * height).fill(120);
@@ -49,12 +61,12 @@ for (const outside of [G.C.SAND, G.C.GRASS, G.C.MOUNTAIN]) {
     base: 'dirt', beach: false,
   });
   for (let y = 0; y < height; y++) {
-    for (let x = 0; x < 9; x++) {
-      assert.equal(classification.cls[y * width + x], G.C.WATER,
-        'negative-elevation sea cells must remain Water after terrain finalization');
-    }
+    for (let x = 0; x < 7; x++) assert.equal(classification.cls[y * width + x], G.C.WATER,
+      'open negative-elevation sea should remain regular Water');
+    for (let x = 7; x < 9; x++) assert.equal(classification.cls[y * width + x], G.C.SHALLOW,
+      'the shoreline should use Shallow Water rather than converting sea to land');
     assert.equal(classification.cls[y * width + 9], G.C.SAND,
-      'the incompatible Dirt coast should become Sand, not convert sea to Dirt');
+      'an incompatible Dirt coast should become Sand, not convert sea to Dirt');
   }
 }
 
@@ -72,12 +84,12 @@ for (const outside of [G.C.SAND, G.C.GRASS, G.C.MOUNTAIN]) {
     base: 'dirt', beach: false,
   });
   for (let y = 0; y < height; y++) {
-    for (let x = 0; x < 4; x++) {
-      assert.equal(result.cls[y * width + x], G.C.WATER,
-        'smoothing must not erase shallow negative-elevation sea');
-      assert.equal(result.waterMask[y * width + x], 1,
-        'the source water mask must agree with the final sea classification');
-    }
+    for (let x = 0; x < 2; x++) assert.equal(result.cls[y * width + x], G.C.WATER,
+      'open negative-elevation sea must stay Water even after smoothing');
+    for (let x = 2; x < 4; x++) assert.equal(result.cls[y * width + x], G.C.SHALLOW,
+      'the last two source-water cells should become shallow without losing the water mask');
+    for (let x = 0; x < 4; x++) assert.equal(result.waterMask[y * width + x], 1,
+      'the source water mask must agree with the final water classification');
   }
 
   // Player-base flattening must not turn sea into buildable land.
@@ -88,8 +100,9 @@ for (const outside of [G.C.SAND, G.C.GRASS, G.C.MOUNTAIN]) {
   G.flatten(st, 3, 5, 5);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < 4; x++) {
-      assert.equal(st.cls[y * width + x], G.C.WATER,
+      assert.ok(st.cls[y * width + x] === G.C.WATER || st.cls[y * width + x] === G.C.SHALLOW,
         'flattening a player base must never convert masked sea to Dirt/Grass');
+      assert.equal(st.waterMask[y * width + x], 1);
     }
   }
 }
@@ -108,9 +121,11 @@ for (const outside of [G.C.SAND, G.C.GRASS, G.C.MOUNTAIN]) {
     base: 'dirt', beach: false,
   });
   for (let y = 0; y < height; y++) {
-    for (let x = 0; x < 5; x++) assert.equal(result.cls[y * width + x], G.C.WATER,
-      'the coastline mask must recover ocean omitted by imperfect/interpolated DEM values');
-    for (let x = 9; x < width; x++) assert.notEqual(result.cls[y * width + x], G.C.WATER,
+    for (let x = 0; x < 5; x++) assert.ok(
+      result.cls[y * width + x] === G.C.WATER || result.cls[y * width + x] === G.C.SHALLOW,
+      'the coastline mask must recover ocean, including its shallow coastal band');
+    for (let x = 9; x < width; x++) assert.ok(
+      result.cls[y * width + x] !== G.C.WATER && result.cls[y * width + x] !== G.C.SHALLOW,
       'the global mask must preserve positive-elevation land');
   }
 }
@@ -136,6 +151,32 @@ assert.equal(G.landCoverMode(new Uint8Array(9).fill(4)), 4,
   'a consistently urban 3×3 neighborhood may still become dirt when enabled');
 assert.equal(G.landCoverMode([2, 2, 2, 2, 2, 1, 1, 1, 1]), 0,
   'weak land-cover majorities should defer to elevation-derived terrain');
+
+// Snow elevation must win over coarse MODIS barren/urban land-cover labels.
+{
+  const width = 13, height = 13, n = width * height;
+  const result = G.classify({
+    W: width, H: height, mpt: 100, lat: 0,
+    elev: new Float32Array(n).fill(6000),
+    land: new Uint8Array(n).fill(3),
+  }, { seaLevel: 0, smooth: 0, mountPct: 0, stonePct: 0, base: 'grass', beach: false });
+  assert.ok(Array.from(result.cls).every(c => c === G.C.SNOW),
+    'high-altitude snow must not be replaced wholesale by MODIS Dirt labels');
+}
+
+// Snowfields must remain snow; where there is no direct snow/grass atlas, adapt only the edge.
+{
+  const width = 17, height = 17, elev = new Float32Array(width * height).fill(100);
+  for (let y = 4; y <= 12; y++) for (let x = 4; x <= 12; x++) elev[y * width + x] = 6000;
+  const result = G.classify({
+    W: width, H: height, mpt: 100, lat: 0, elev,
+    land: new Uint8Array(width * height).fill(5),
+  }, { seaLevel: 0, smooth: 0, mountPct: 0, stonePct: 0, base: 'grass', beach: false });
+  for (let y = 4; y <= 12; y++) for (let x = 4; x <= 12; x++) {
+    assert.equal(result.cls[y * width + x], G.C.SNOW,
+      'the snowy region should not be eroded into Dirt by transition cleanup');
+  }
+}
 
 // MODIS water is coarse (~2.8 km per cell at the equator) and must not override
 // positive elevation; accurate water geometry is supplied separately.
