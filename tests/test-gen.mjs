@@ -8,16 +8,14 @@ const mod = { exports: {} };
 vm.runInNewContext(readFileSync(new URL('../public/js/gen.js', import.meta.url), 'utf8'), { module: mod, Buffer, console });
 const G = mod.exports;
 
-// Water depth uses three distinct base sets and the game's matching flat transitions.
+// Every water cell uses the normal Water tileset; no depth-based variants are generated.
 assert.deepEqual(JSON.parse(JSON.stringify(G.BASE_SETS.slice(0, 3))), [
-  ['deepwater', [0]], ['water', [0]], ['shallowwater', [0]],
+  ['water', [0]], ['water', [0]], ['water', [0]],
 ]);
-assert.ok(G.RIM_DEF.some(([outside, inside, set]) =>
-  outside === G.C.SHALLOW && inside === G.C.WATER && set === 'shallowwater2water_flat'));
-assert.ok(G.RIM_DEF.some(([outside, inside, set]) =>
-  outside === G.C.WATER && inside === G.C.DEEP && set === 'water2deepwater_flat'));
-
-// A broad water body should have a shallow shore, a regular-water band, and deep interior.
+for (const outside of [G.C.SAND, G.C.GRASS, G.C.MOUNTAIN]) {
+  assert.ok(G.RIM_DEF.some(([from, to]) => from === outside && to === G.C.WATER),
+    'coast transitions should lead directly into regular Water');
+}
 {
   const width = 25, height = 25;
   const elev = new Float32Array(width * height).fill(100);
@@ -29,9 +27,11 @@ assert.ok(G.RIM_DEF.some(([outside, inside, set]) =>
     { W: width, H: height, mpt: 100, lat: 0, elev, water },
     { seaLevel: 0, smooth: 0, mountPct: 0, stonePct: 0, base: 'grass', beach: false },
   );
-  assert.equal(result.cls[12 * width + 2], G.C.SHALLOW, 'shoreline should be shallow water');
-  assert.equal(result.cls[12 * width + 5], G.C.WATER, 'water away from shore should use the middle band');
-  assert.equal(result.cls[12 * width + 12], G.C.DEEP, 'deep water should occupy the broad interior');
+  const waterClasses = Array.from(result.cls).filter(cls =>
+    cls === G.C.DEEP || cls === G.C.WATER || cls === G.C.SHALLOW);
+  assert.equal(waterClasses.length, 21 * 21, 'all water area cells should be classified as water');
+  assert.ok(waterClasses.every(cls => cls === G.C.WATER),
+    'no cell should be classified as shallow or deep water');
 }
 
 
@@ -73,7 +73,7 @@ assert.equal(G.landCoverMode([2, 2, 2, 2, 2, 1, 1, 1, 1]), 0,
     water: vectorWater,
   }, { seaLevel: 0, smooth: 0, mountPct: 0, stonePct: 0, base: 'grass', beach: false });
   assert.equal(withVectorWater.cls[4 * width + 4], G.C.WATER,
-    'a real multi-cell water geometry should use the shore-distance depth bands');
+    'a real multi-cell water geometry should use regular Water');
 }
 const zlib = require('zlib');
 const fs = require('fs');
