@@ -1,30 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
   <title id="title">RW Map Forge logo</title>
-  <desc id="desc">A location marker above snow-capped mountains, evergreen forest and a bright winding river, enclosed in a deep-blue circular emblem.</desc>
-  <defs>
-    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4ce1ed"/><stop offset="1" stop-color="#2676ff"/></linearGradient>
-    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#16405a"/><stop offset="1" stop-color="#0a202e"/></linearGradient>
-    <linearGradient id="rock" x1="0" y1="0" x2=".4" y2="1"><stop offset="0" stop-color="#f6fbff"/><stop offset=".52" stop-color="#b4cddd"/><stop offset="1" stop-color="#617d93"/></linearGradient>
-    <clipPath id="inside"><circle cx="256" cy="256" r="211"/></clipPath>
-  </defs>
-  <circle cx="256" cy="256" r="245" fill="#06111e" stroke="url(#ring)" stroke-width="12"/>
-  <circle cx="256" cy="256" r="224" fill="url(#sky)" stroke="#2b82b7" stroke-width="4"/>
-  <g clip-path="url(#inside)">
-    <path d="M23 303L95 218L145 264L213 156L271 232L323 177L398 268L457 221L501 305V500H10Z" fill="url(#rock)" stroke="#e6f3fa" stroke-width="5" stroke-linejoin="round"/>
-    <path d="M169 213L213 156L255 210L235 203L220 215L205 198L190 210Z" fill="#fff"/>
-    <path d="M294 218L323 177L354 220L340 213L326 225L315 210Z" fill="#fff"/>
-    <path d="M15 317L87 266L125 294L170 253L214 306L270 253L319 301L363 257L412 290L471 254L510 322V500H15Z" fill="#276a4e"/>
-    <path d="M13 355L64 316L94 343L132 301L164 345L206 310L239 348L279 309L322 354L361 314L400 347L438 311L509 359V510H13Z" fill="#174c3e"/>
-    <g fill="#0d342f" stroke="#092b2b" stroke-width="4" stroke-linejoin="round">
-      <path d="M44 386L69 324L94 386Z"/><path d="M75 406L105 333L135 406Z"/>
-      <path d="M116 386L140 325L164 386Z"/><path d="M155 422L187 341L219 422Z"/>
-      <path d="M299 416L326 343L353 416Z"/><path d="M335 395L359 331L383 395Z"/>
-      <path d="M375 419L405 340L435 419Z"/><path d="M418 392L443 328L468 392Z"/>
-    </g>
-    <path d="M209 290C237 266 263 283 270 311S253 358 237 379S244 426 278 459" fill="none" stroke="#062f4b" stroke-width="45" stroke-linecap="round"/>
-    <path d="M209 290C237 266 263 283 270 311S253 358 237 379S244 426 278 459" fill="none" stroke="#20c5ef" stroke-width="31" stroke-linecap="round"/>
-    <path d="M209 290C237 266 263 283 270 311S253 358 237 379S244 426 278 459" fill="none" stroke="#e8fbff" stroke-width="5" stroke-linecap="round"/>
+  <desc id="desc">The original RW Map Forge mark: an orange outlined hexagon with a simplified mountain and terrain motif.</desc>
+  <g transform="translate(16 16) scale(7)" fill="none" stroke="#e8793a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M16 2.5l11.7 6.75v13.5L16 29.5 4.3 22.75V9.25L16 2.5z"/>
+    <path d="M8.5 21l5-8.2 3.2 4.6 2.3-3.2 4.5 6.8"/>
+    <path d="M16 2.5v4.2M27.7 9.25l-3.6 2.1M4.3 9.25l3.6 2.1"/>
   </g>
-  <path d="M256 23C215 23 185 54 185 96C185 149 256 194 256 194S327 149 327 96C327 54 297 23 256 23Z" fill="#f5fbff" stroke="#167fb8" stroke-width="8"/>
-  <circle cx="256" cy="94" r="24" fill="#1779ac"/>
 </svg>
