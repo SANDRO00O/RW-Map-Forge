@@ -1,7 +1,7 @@
 <!-- Project banner -->
 <p align="center">
   <a href="https://rw-map-forge.pages.dev">
-    <img src="docs/assets/rw-map-forge-banner.svg" alt="RW Map Forge — create detailed maps for Rusted Warfare" width="100%">
+    <img src="docs/assets/rw-map-forge-banner.svg" alt="RW Map Forge original terrain logo" width="320">
   </a>
 </p>
 
