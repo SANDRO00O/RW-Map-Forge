@@ -1,84 +1,20 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="430" viewBox="0 0 1600 430" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="300" viewBox="0 0 1500 300" role="img" aria-labelledby="title desc">
   <title id="title">RW Map Forge</title>
-  <desc id="desc">A custom dark-blue terrain illustration with mountains, forests, rivers, coastlines and a location marker for a real-world map generator.</desc>
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#07111f"/><stop offset=".58" stop-color="#0b1c2c"/><stop offset="1" stop-color="#102e3a"/>
-    </linearGradient>
-    <linearGradient id="land" x1="0" y1="0" x2=".9" y2="1">
-      <stop offset="0" stop-color="#72986f"/><stop offset=".45" stop-color="#2f755d"/><stop offset="1" stop-color="#1f4b50"/>
-    </linearGradient>
-    <linearGradient id="sea" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#123b5b"/><stop offset="1" stop-color="#087da1"/>
-    </linearGradient>
-    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#45d2e9"/><stop offset="1" stop-color="#338bff"/>
-    </linearGradient>
-    <linearGradient id="mountain" x1="0" y1="0" x2=".4" y2="1">
-      <stop offset="0" stop-color="#f4f8fb"/><stop offset=".42" stop-color="#9eb8cb"/><stop offset="1" stop-color="#526b82"/>
-    </linearGradient>
-    <pattern id="grid" width="44" height="44" patternUnits="userSpaceOnUse">
-      <path d="M44 0H0V44" fill="none" stroke="#a9d1e0" stroke-opacity=".08" stroke-width="1"/>
-    </pattern>
-    <pattern id="contours" width="140" height="100" patternUnits="userSpaceOnUse">
-      <path d="M-30 36C-5 2 32 2 53 27S99 57 133 28S170 7 190 30M-29 55C2 20 34 22 57 45S103 73 139 47S171 30 191 51M-24 75C7 44 38 43 63 62S107 90 147 67S176 53 193 69" fill="none" stroke="#d1f4e6" stroke-opacity=".18" stroke-width="1.25"/>
-    </pattern>
-    <clipPath id="mapclip"><path d="M884 0H1600V430H806C858 377 844 331 879 286C916 237 894 198 934 159C964 130 938 78 884 0Z"/></clipPath>
-    <filter id="soft"><feGaussianBlur stdDeviation="35"/></filter>
-  </defs>
-  <rect width="1600" height="430" rx="24" fill="url(#bg)"/>
-  <circle cx="1180" cy="60" r="220" fill="#0b80ac" opacity=".12" filter="url(#soft)"/>
-  <circle cx="860" cy="420" r="180" fill="#1fa77b" opacity=".12" filter="url(#soft)"/>
-  <rect width="1600" height="430" rx="24" fill="url(#grid)"/>
-  <g clip-path="url(#mapclip)">
-    <rect x="790" y="-20" width="850" height="500" fill="url(#sea)"/>
-    <path d="M814 -15L1025 -17L1087 34L1109 83L1167 107L1173 151L1226 175L1220 218L1276 247L1270 289L1314 324L1300 368L1355 430L782 450Z" fill="url(#land)" stroke="#6be0c0" stroke-width="3" stroke-opacity=".7"/>
-    <path d="M814 -15L1025 -17L1087 34L1109 83L1167 107L1173 151L1226 175L1220 218L1276 247L1270 289L1314 324L1300 368L1355 430L782 450Z" fill="url(#contours)"/>
-    <path d="M804 95C888 104 924 72 979 93S1064 129 1110 166S1180 210 1223 228S1260 288 1320 316" fill="none" stroke="#b8e8bc" stroke-width="2" stroke-opacity=".52"/>
-    <path d="M819 123C898 129 922 96 973 115S1051 150 1095 186S1172 229 1210 249S1250 309 1304 337" fill="none" stroke="#b8e8bc" stroke-width="2" stroke-opacity=".4"/>
-    <path d="M826 152C902 156 927 123 972 140S1035 173 1081 207S1152 248 1193 271S1235 331 1290 359" fill="none" stroke="#b8e8bc" stroke-width="2" stroke-opacity=".32"/>
-    <path d="M949 5L1018 68L1050 139L1091 181L1133 237L1174 287L1192 351L1238 410" fill="none" stroke="#b4a77a" stroke-width="5" stroke-opacity=".7"/>
-    <path d="M949 5L1018 68L1050 139L1091 181L1133 237L1174 287L1192 351L1238 410" fill="none" stroke="#f4deb0" stroke-width="1.5" stroke-opacity=".85"/>
-    <path d="M1004 0L1028 48L1006 91L1042 118L1032 169L1067 208L1055 251L1096 294L1093 342L1126 397" fill="none" stroke="#45bcd1" stroke-width="8" stroke-linecap="round" stroke-opacity=".9"/>
-    <path d="M1004 0L1028 48L1006 91L1042 118L1032 169L1067 208L1055 251L1096 294L1093 342L1126 397" fill="none" stroke="#baf6f4" stroke-width="2" stroke-linecap="round" stroke-opacity=".9"/>
-    <path d="M1139 44L1171 18L1200 40L1212 79L1244 93L1254 121L1227 143L1203 129L1181 98Z" fill="#cbdedb" opacity=".18"/>
-    <path d="M1259 11L1302 0L1341 18L1364 54L1344 82L1313 77L1281 54Z" fill="#dcebe5" opacity=".16"/>
-    <path d="M1287 203C1320 180 1349 190 1372 211S1412 240 1432 226S1477 207 1510 228S1545 265 1581 259" fill="none" stroke="#b2d8de" stroke-opacity=".3" stroke-width="1.5"/>
-    <path d="M1281 226C1314 203 1343 213 1366 234S1406 263 1426 249S1471 230 1504 251S1539 288 1575 282" fill="none" stroke="#b2d8de" stroke-opacity=".24" stroke-width="1.5"/>
-    <rect x="790" y="-20" width="850" height="500" fill="url(#grid)"/>
-    <g fill="#d9f7ff" opacity=".75">
-      <circle cx="1033" cy="156" r="3"/><circle cx="1140" cy="280" r="3"/><circle cx="1206" cy="365" r="3"/><circle cx="1340" cy="95" r="2.5"/>
-    </g>
+  <desc id="desc">The original RW Map Forge hexagonal terrain mark and wordmark on a transparent background.</desc>
+  <style>
+    .brand-main { fill: #17212d; }
+    .brand-accent { fill: #e8793a; }
+    @media (prefers-color-scheme: dark) {
+      .brand-main { fill: #eaeef4; }
+    }
+  </style>
+  <g transform="translate(205 38) scale(7)" fill="none" stroke="#e8793a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M16 2.5l11.7 6.75v13.5L16 29.5 4.3 22.75V9.25L16 2.5z"/>
+    <path d="M8.5 21l5-8.2 3.2 4.6 2.3-3.2 4.5 6.8"/>
+    <path d="M16 2.5v4.2M27.7 9.25l-3.6 2.1M4.3 9.25l3.6 2.1"/>
   </g>
-  <g opacity=".28" fill="none" stroke="#7cc8d5" stroke-width="1.1">
-    <path d="M-20 345C116 265 178 310 256 346S416 398 512 350S666 273 760 321"/>
-    <path d="M-20 367C116 287 178 332 256 368S416 420 512 372S666 295 760 343"/>
-    <path d="M-20 389C116 309 178 354 256 390S416 442 512 394S666 317 760 365"/>
-    <path d="M-20 411C116 331 178 376 256 412S416 464 512 416S666 339 760 387"/>
+  <g font-family="Inter, Segoe UI, Arial, sans-serif" font-size="116" font-weight="700" letter-spacing="-2">
+    <text x="445" y="185" class="brand-main">RW Map</text>
+    <text x="870" y="185" class="brand-accent">Forge</text>
   </g>
-  <g transform="translate(82 89)">
-    <circle cx="91" cy="115" r="83" fill="#06111e" stroke="#54d5e8" stroke-width="4"/>
-    <circle cx="91" cy="115" r="72" fill="#0e2837" stroke="#2b83b9" stroke-width="2"/>
-    <path d="M31 133L72 68L96 99L122 57L160 133Z" fill="url(#mountain)" stroke="#dcecf2" stroke-width="2" stroke-linejoin="round"/>
-    <path d="M58 91L72 68L87 88L77 85L70 92L64 86Z" fill="#fff"/>
-    <path d="M106 79L122 57L138 85L129 80L122 87L116 78Z" fill="#fff"/>
-    <path d="M35 139L56 115L69 132L84 118L98 139L115 110L129 128L144 115L160 141V166H35Z" fill="#247052"/>
-    <g fill="#123e35" stroke="#071d23" stroke-width="1.4" stroke-linejoin="round">
-      <path d="M45 158L57 131L69 158Z"/><path d="M63 166L77 134L91 166Z"/><path d="M119 166L132 133L145 166Z"/><path d="M137 159L149 137L160 159Z"/>
-    </g>
-    <path d="M78 174C91 159 103 169 106 182S93 201 83 212" fill="none" stroke="#063e5d" stroke-width="19" stroke-linecap="round"/>
-    <path d="M78 174C91 159 103 169 106 182S93 201 83 212" fill="none" stroke="#20c5ef" stroke-width="12" stroke-linecap="round"/>
-    <path d="M78 174C91 159 103 169 106 182S93 201 83 212" fill="none" stroke="#e1fbff" stroke-width="2.5" stroke-linecap="round"/>
-    <path d="M91 21C74 21 62 34 62 51C62 73 91 91 91 91S120 73 120 51C120 34 108 21 91 21Z" fill="#f7fbff" stroke="#1888be" stroke-width="4"/>
-    <circle cx="91" cy="50" r="10" fill="#1378b3"/>
-  </g>
-  <g font-family="Inter,Segoe UI,Arial,sans-serif">
-    <text x="305" y="164" font-size="27" font-weight="650" letter-spacing="5" fill="#a9c7d8">REAL-WORLD TERRAIN</text>
-    <text x="302" y="239" font-size="70" font-weight="800" letter-spacing="-2.5" fill="#f5f9ff">RW MAP <tspan fill="url(#accent)">FORGE</tspan></text>
-    <text x="307" y="288" font-size="26" font-weight="450" fill="#c8dce8">Create detailed maps for Rusted Warfare.</text>
-    <rect x="307" y="321" width="265" height="42" rx="21" fill="#0e2b40" stroke="#347ea1" stroke-opacity=".9"/>
-    <circle cx="330" cy="342" r="5" fill="#4bd8cf"/>
-    <text x="346" y="349" font-size="15" font-weight="700" letter-spacing="1.6" fill="#d7f0f8">EXPLORE. GENERATE. EXPORT.</text>
-  </g>
-  <path d="M27 24H1573Q1576 24 1576 27V403Q1576 406 1573 406H27Q24 406 24 403V27Q24 24 27 24Z" fill="none" stroke="#9edcf0" stroke-opacity=".18"/>
 </svg>
